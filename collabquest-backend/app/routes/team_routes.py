@@ -212,3 +212,29 @@ async def create_team_roadmap(team_id: str, current_user: User = Depends(get_cur
     team.project_roadmap = ai_plan
     await team.save()
     return team
+
+@router.post("/{team_id}/reset")
+async def reset_match(team_id: str, req: InviteRequest, current_user: User = Depends(get_current_user)):
+    """
+    Resets a match from 'rejected' back to 'matched' so actions can be taken again.
+    """
+    team = await Team.get(team_id)
+    if not team: raise HTTPException(404)
+    
+    # Determine who is the candidate
+    leader_id = team.members[0]
+    is_leader = str(current_user.id) == leader_id
+    
+    if is_leader: candidate_id = req.target_user_id
+    else: candidate_id = str(current_user.id)
+    
+    match_record = await Match.find_one(Match.user_id == candidate_id, Match.project_id == team_id)
+    
+    if match_record:
+        # Only allow reset if currently rejected or joined (to leave and rejoin)
+        match_record.status = "matched"
+        match_record.rejected_by = None # Clear rejection
+        match_record.last_action_at = datetime.now()
+        await match_record.save()
+        
+    return {"status": "reset"}
