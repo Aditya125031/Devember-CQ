@@ -4,44 +4,30 @@ import { useParams, useRouter } from "next/navigation";
 import Cookies from "js-cookie";
 import axios from "axios";
 import { motion, AnimatePresence } from "framer-motion";
+import GlobalHeader from "@/components/GlobalHeader";
 import Link from "next/link";
 import { 
   Bot, Calendar, Code2, Layers, LayoutDashboard, Loader2, UserPlus, 
-  Sparkles, X, Plus, RefreshCw, Trash2, Check, AlertTriangle, MessageSquare, Mail, ThumbsUp, Send
+  Sparkles, X, Plus, RefreshCw, Trash2, Check, AlertTriangle, MessageSquare, Mail, ThumbsUp, XCircle, Clock, Send
 } from "lucide-react";
 
-// ... (Constants, Interfaces unchanged) ...
+// ... (PRESET_SKILLS, Member, Team, Suggestions interfaces unchanged) ...
 const PRESET_SKILLS = ["React", "Python", "Node.js", "TypeScript", "Next.js", "Tailwind", "MongoDB", "Firebase", "Flutter", "Java", "C++", "Rust", "Go", "Figma", "UI/UX", "AI/ML", "Docker", "AWS", "Solidity"];
-
-interface Member {
-    id: string;
-    username: string;
-    avatar_url: string;
-    email: string;
-}
-
-interface Team {
-  id: string;
-  name: string;
-  description: string;
-  leader_id: string;
-  members: Member[];
-  needed_skills: string[];
-  project_roadmap?: any;
-  chat_group_id?: string;
-}
-
-interface Suggestions {
-    add: string[];
-    remove: string[];
-}
+interface Member { id: string; username: string; avatar_url: string; email: string; }
+interface Team { id: string; name: string; description: string; leader_id: string; members: Member[]; needed_skills: string[]; project_roadmap?: any; chat_group_id?: string; }
+interface Suggestions { add: string[]; remove: string[]; }
+interface Candidate { id: string; name: string; avatar: string; contact: string; role: string; status: string; rejected_by?: string; }
 
 export default function TeamDetails() {
+  // ... (State setup matches V5) ...
   const params = useParams();
   const router = useRouter();
   const [team, setTeam] = useState<Team | null>(null);
   const [currentUserId, setCurrentUserId] = useState("");
   const [loading, setLoading] = useState(true);
+  
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [suggestions, setSuggestions] = useState<Suggestions | null>(null); 
@@ -68,55 +54,36 @@ export default function TeamDetails() {
       const res = await axios.get(`http://localhost:8000/teams/${teamId}`);
       setTeam(res.data);
       setLocalSkills(res.data.needed_skills || []);
+      if (res.data.leader_id) fetchCandidates(token, res.data.id); 
     } catch (err) { console.error(err); } finally { setLoading(false); }
   };
+
+  const fetchCandidates = async (token: string, tid: string) => {
+      try {
+          const res = await axios.get(`http://localhost:8000/matches/team/${tid}`, { headers: { Authorization: `Bearer ${token}` } });
+          // Filter out those who are already joined or rejected
+          setCandidates(res.data.filter((c: Candidate) => c.status !== "joined" && c.status !== "rejected"));
+      } catch (e) { }
+  }
 
   const isLeader = team && currentUserId === team.leader_id;
   const isMember = team && team.members.some(m => m.id === currentUserId);
 
-  const createTeamChat = async () => {
-      const token = Cookies.get("token");
-      try {
-          const res = await axios.post(`http://localhost:8000/chat/groups/team/${teamId}`, {}, { headers: { Authorization: `Bearer ${token}` } });
-          router.push(`/chat?targetId=${res.data._id || res.data.id}`);
-      } catch (err) { alert("Failed to create group"); }
-  };
+  // --- ACTIONS ---
+  // ... (sendInvite, acceptRequest, rejectRequest same as V5 but with Email/Delete support in JSX) ...
+  const sendInvite = async (c: Candidate) => { const token = Cookies.get("token"); try { setCandidates(prev => prev.map(m => m.id === c.id ? { ...m, status: "invited" } : m)); await axios.post(`http://localhost:8000/teams/${teamId}/invite`, { target_user_id: c.id }, { headers: { Authorization: `Bearer ${token}` } }); } catch (err) { alert("Failed"); fetchCandidates(token!, teamId); } }
+  const acceptRequest = async (c: Candidate) => { const token = Cookies.get("token"); try { await axios.post(`http://localhost:8000/teams/${teamId}/members`, { target_user_id: c.id }, { headers: { Authorization: `Bearer ${token}` } }); fetchTeamData(token!); fetchCandidates(token!, teamId); } catch (err) { alert("Failed"); } }
+  const rejectRequest = async (c: Candidate) => { if(!confirm("Reject?")) return; const token = Cookies.get("token"); try { await axios.post(`http://localhost:8000/teams/${teamId}/reject`, { target_user_id: c.id }, { headers: { Authorization: `Bearer ${token}` } }); fetchCandidates(token!, teamId); } catch (err) { alert("Failed"); } }
+  const deleteCandidate = async (c: Candidate) => { if(!confirm("Remove from list?")) return; const token = Cookies.get("token"); try { await axios.delete(`http://localhost:8000/matches/delete/${teamId}/${c.id}`, { headers: { Authorization: `Bearer ${token}` } }); fetchCandidates(token!, teamId); } catch (err) { alert("Failed"); } }
+
+  // ... (Keep existing helpers: createTeamChat, removeMember, likeProject, openEmailComposer, handleSendEmail) ...
+  const createTeamChat = async () => { const token = Cookies.get("token"); try { const res = await axios.post(`http://localhost:8000/chat/groups/team/${teamId}`, {}, { headers: { Authorization: `Bearer ${token}` } }); router.push(`/chat?targetId=${res.data._id || res.data.id}`); } catch (err) { alert("Failed to create group"); } };
+  const removeMember = async (memberId: string) => { if(!confirm("Remove?")) return; const token = Cookies.get("token"); try { await axios.delete(`http://localhost:8000/teams/${teamId}/members/${memberId}`, { headers: { Authorization: `Bearer ${token}` } }); if (token) fetchTeamData(token); } catch (err) { alert("Failed to remove"); } };
+  const likeProject = async () => { const token = Cookies.get("token"); try { const res = await axios.post("http://localhost:8000/matches/swipe", { target_id: teamId, direction: "right", type: "project", related_id: teamId }, { headers: { Authorization: `Bearer ${token}` } }); if(res.data.status === "cooldown") alert("Wait a few days!"); else if (res.data.is_match) { alert("It's a Match!"); if(token) fetchTeamData(token); } else alert("Interest sent!"); } catch (err) { alert("Failed"); } }
+  const openEmailComposer = (u: any) => { setEmailRecipient({ id: u.id, name: u.username || u.name }); setShowEmailModal(true); }
+  const handleSendEmail = async () => { const token = Cookies.get("token"); if (!emailRecipient) return; try { await axios.post("http://localhost:8000/communication/send-email", { recipient_id: emailRecipient.id, subject: emailSubject, body: emailBody }, { headers: { Authorization: `Bearer ${token}` } }); alert("Email sent!"); setShowEmailModal(false); } catch (err) { alert("Failed"); } }
   
-  const removeMember = async (memberId: string) => {
-      if(!confirm("Are you sure you want to remove this member?")) return;
-      const token = Cookies.get("token");
-      try {
-          await axios.delete(`http://localhost:8000/teams/${teamId}/members/${memberId}`, { headers: { Authorization: `Bearer ${token}` } });
-          if (token) fetchTeamData(token); 
-      } catch (err) { alert("Failed to remove member"); }
-  };
-
-  const likeProject = async () => {
-      const token = Cookies.get("token");
-      try {
-          const res = await axios.post("http://localhost:8000/matches/swipe", {
-              target_id: teamId, direction: "right", type: "project", related_id: teamId
-          }, { headers: { Authorization: `Bearer ${token}` } });
-          
-          if(res.data.status === "cooldown") {
-              alert("Wait a few days before expressing interest again!");
-          } else if (res.data.is_match) {
-              alert("It's a Match! You have joined the team.");
-              if(token) fetchTeamData(token);
-          } else {
-              alert("Interest sent! The leader will be notified.");
-          }
-      } catch (err) { alert("Failed to like project"); }
-  }
-
-  const openEmailComposer = (member: Member) => { setEmailRecipient({ id: member.id, name: member.username }); setShowEmailModal(true); }
-  const handleSendEmail = async () => {
-      const token = Cookies.get("token");
-      if (!emailRecipient) return;
-      try { await axios.post("http://localhost:8000/communication/send-email", { recipient_id: emailRecipient.id, subject: emailSubject, body: emailBody }, { headers: { Authorization: `Bearer ${token}` } }); alert("Email sent securely!"); setShowEmailModal(false); setEmailSubject(""); setEmailBody(""); } catch (err) { alert("Failed to send email"); }
-  }
-
-  // ... (Skill/Roadmap handlers unchanged) ...
+  // ... (Skill/Roadmap helpers unchanged) ...
   const addSkill = (skill: string) => { if (!localSkills.includes(skill)) setLocalSkills([...localSkills, skill]); setDropdownValue(""); };
   const removeSkill = (skill: string) => { setLocalSkills(localSkills.filter(s => s !== skill)); };
   const saveSkills = async () => { const token = Cookies.get("token"); try { await axios.put(`http://localhost:8000/teams/${teamId}/skills`, { needed_skills: localSkills }, { headers: { Authorization: `Bearer ${token}` } }); if (token) fetchTeamData(token); setIsEditingSkills(false); setSuggestions(null); } catch (err) { alert("Failed"); } };
@@ -128,8 +95,12 @@ export default function TeamDetails() {
   if (loading || !team) return <div className="flex h-screen items-center justify-center bg-gray-950 text-white"><Loader2 className="animate-spin" /></div>;
 
   return (
-    <div className="min-h-screen bg-gray-950 text-white p-8">
-      <div className="max-w-5xl mx-auto">
+    <div className="min-h-screen bg-gray-950 text-white">
+      <GlobalHeader />
+      
+      <div className="max-w-5xl mx-auto p-8">
+        {/* ... (Header, Skills, Members sections same as V5) ... */}
+        {/* Just paste lines 145 - 200 from previous V5 code here */}
         <header className="mb-8 border-b border-gray-800 pb-8">
           <div className="flex justify-between items-start mb-6">
             <div><h1 className="text-4xl font-extrabold bg-gradient-to-r from-purple-400 to-blue-500 bg-clip-text text-transparent mb-2">{team.name}</h1><p className="text-gray-400 max-w-2xl text-lg">{team.description}</p></div>
@@ -145,42 +116,57 @@ export default function TeamDetails() {
                 {isEditingSkills && suggestions && (suggestions.add.length > 0 || suggestions.remove.length > 0) && (<motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} className="mb-4 bg-black/40 border border-blue-500/30 rounded-xl p-3"><h4 className="text-[10px] font-bold text-blue-400 mb-2 uppercase">AI Suggestions</h4><div className="flex flex-wrap gap-2">{suggestions.add.map(s => <div key={s} className="flex items-center gap-1 bg-blue-900/20 border border-blue-500/50 px-2 py-1 rounded text-xs text-blue-200">{s} <button onClick={() => acceptSuggestion('add', s)}><Check className="w-3 h-3 text-green-400"/></button></div>)}{suggestions.remove.map(s => <div key={s} className="flex items-center gap-1 bg-red-900/20 border border-red-500/50 px-2 py-1 rounded text-xs text-red-200">{s} <button onClick={() => acceptSuggestion('remove', s)}><Check className="w-3 h-3 text-red-400"/></button></div>)}</div></motion.div>)}
                 <div className="flex flex-wrap gap-2">{(isEditingSkills ? localSkills : team.needed_skills).map((skill, k) => <span key={k} className="bg-gray-800 px-3 py-1 rounded-full text-sm border border-gray-700 flex items-center gap-2">{skill}{isEditingSkills && <button onClick={() => removeSkill(skill)}><X className="w-3 h-3 hover:text-red-400"/></button>}</span>)}{isEditingSkills && <div className="relative"><select className="bg-gray-950 border border-gray-700 text-sm rounded-full px-3 py-1 outline-none" value={dropdownValue} onChange={(e) => addSkill(e.target.value)}><option value="" disabled>+ Add</option>{PRESET_SKILLS.filter(s => !localSkills.includes(s)).map(s => <option key={s} value={s}>{s}</option>)}</select></div>}</div>
               </div>
-
-              {/* --- MEMBERS LIST WITH HOVER BUTTONS --- */}
               <div className="bg-gray-900/50 p-6 rounded-2xl border border-gray-800">
                   <h3 className="font-bold flex items-center gap-2 mb-4"><UserPlus className="text-green-400 w-5 h-5" /> Team ({team.members.length})</h3>
-                  <div className="space-y-3">
-                      {team.members.map((m: any, i: number) => {
-                          if (typeof m === 'string') return null;
-                          const isMe = m.id === currentUserId;
-                          // Show buttons if I am a member (can msg anyone but self) OR if I am visitor viewing Leader
-                          const canCommunicate = (isMember && !isMe) || (!isMember && m.id === team.leader_id);
-
-                          return (
-                            <div key={m.id || i} className="flex items-center justify-between group">
-                                <div className="flex items-center gap-2">
-                                    <img src={m.avatar_url || "https://github.com/shadcn.png"} className="w-8 h-8 rounded-full bg-gray-800"/>
-                                    <div><p className="text-sm font-bold leading-none">{m.username}</p>{m.id === team.leader_id && <span className="text-[10px] text-yellow-500 font-mono">LEADER</span>}</div>
-                                </div>
-                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    {canCommunicate && (
-                                        <>
-                                            <Link href={`/chat?targetId=${m.id}`} title="Chat"><button className="text-gray-500 hover:text-blue-400 p-1"><MessageSquare className="w-4 h-4"/></button></Link>
-                                            <button onClick={() => openEmailComposer(m)} title="Email" className="text-gray-500 hover:text-green-400 p-1"><Mail className="w-4 h-4"/></button>
-                                        </>
-                                    )}
-                                    {isLeader && !isMe && <button onClick={() => removeMember(m.id)} title="Remove" className="text-gray-500 hover:text-red-500 p-1"><Trash2 className="w-4 h-4"/></button>}
-                                </div>
-                            </div>
-                          );
-                      })}
-                  </div>
+                  <div className="space-y-3">{team.members.map((m: any, i: number) => {if (typeof m === 'string') return null; return (<div key={m.id || i} className="flex items-center justify-between group"><div className="flex items-center gap-2"><img src={m.avatar_url || "https://github.com/shadcn.png"} className="w-8 h-8 rounded-full bg-gray-800"/><div><p className="text-sm font-bold leading-none">{m.username}</p>{m.id === team.leader_id && <span className="text-[10px] text-yellow-500 font-mono">LEADER</span>}</div></div><div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">{(isMember && m.id !== currentUserId) || (!isMember && m.id === team.leader_id) ? <><Link href={`/chat?targetId=${m.id}`} title="Chat"><button className="text-gray-500 hover:text-blue-400 p-1"><MessageSquare className="w-4 h-4"/></button></Link><button onClick={() => openEmailComposer(m)} title="Email" className="text-gray-500 hover:text-green-400 p-1"><Mail className="w-4 h-4"/></button></> : null}{isLeader && m.id !== team.leader_id && <button onClick={() => removeMember(m.id)} title="Remove" className="text-gray-500 hover:text-red-500 p-1"><Trash2 className="w-4 h-4"/></button>}</div></div>);})}</div>
               </div>
           </div>
         </header>
 
+        {/* --- INTERESTED CANDIDATES SECTION (UPDATED) --- */}
+        {isLeader && candidates.length > 0 && (
+            <div className="mb-12 bg-gray-900 border border-blue-900/30 p-6 rounded-2xl">
+                 <h3 className="text-xl font-bold mb-4 flex items-center gap-2 text-blue-300"><UserPlus className="w-5 h-5"/> Interested Candidates</h3>
+                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                     {candidates.map(c => (
+                         <div key={c.id} className="bg-gray-800 p-4 rounded-xl flex items-center justify-between border border-gray-700">
+                             <div className="flex items-center gap-3">
+                                 <img src={c.avatar} className="w-10 h-10 rounded-full"/>
+                                 <div><h4 className="font-bold text-sm">{c.name}</h4><p className="text-[10px] text-gray-400">Match Score</p></div>
+                             </div>
+                             {/* ACTION BUTTONS */}
+                             <div className="flex gap-2">
+                                 {c.status === "matched" && (
+                                     <>
+                                        <button onClick={() => sendInvite(c)} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded text-xs flex items-center gap-1"><Plus className="w-3 h-3"/> Invite</button>
+                                        <button onClick={() => deleteCandidate(c)} className="bg-gray-700 hover:bg-red-900 px-2 rounded text-red-400"><Trash2 className="w-3 h-3"/></button>
+                                     </>
+                                 )}
+                                 {c.status === "requested" && (
+                                     <>
+                                        <button onClick={() => acceptRequest(c)} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded text-xs flex items-center gap-1"><Check className="w-3 h-3"/> Accept</button>
+                                        <button onClick={() => rejectRequest(c)} className="bg-red-900 hover:bg-red-800 text-red-200 px-2 py-1 rounded text-xs"><X className="w-3 h-3"/></button>
+                                     </>
+                                 )}
+                                 {c.status === "invited" && <span className="text-xs text-gray-500 flex items-center gap-1"><Clock className="w-3 h-3"/> Pending</span>}
+                                 
+                                 {/* NEW: Chat/Email/Delete for Candidates */}
+                                 <Link href={`/chat?targetId=${c.id}`}><button className="bg-gray-700 p-1.5 rounded hover:text-blue-300"><MessageSquare className="w-3 h-3"/></button></Link>
+                                 <button onClick={() => openEmailComposer(c)} className="bg-gray-700 p-1.5 rounded hover:text-green-300"><Mail className="w-3 h-3"/></button>
+                                 
+                                 {/* Delete if not pending/requested */}
+                                 {c.status !== "matched" && c.status !== "requested" && (
+                                     <button onClick={() => deleteCandidate(c)} className="bg-gray-700 p-1.5 rounded hover:text-red-400"><Trash2 className="w-3 h-3"/></button>
+                                 )}
+                             </div>
+                         </div>
+                     ))}
+                 </div>
+            </div>
+        )}
+
         {/* ... (Roadmap Section - Unchanged) ... */}
-        {/* ... (Keep existing Roadmap JSX) ... */}
+        {/* Paste Roadmap JSX */}
         <div className="space-y-6">
             <div className="flex items-center justify-between"><h2 className="text-2xl font-bold flex items-center gap-3"><Calendar className="text-purple-500" /> Execution Roadmap</h2>{isLeader && team.project_roadmap && team.project_roadmap.phases && <button onClick={generateRoadmap} disabled={isGenerating} className="text-xs flex items-center gap-2 text-gray-400 hover:text-white transition">{isGenerating ? <Loader2 className="w-3 h-3 animate-spin"/> : <RefreshCw className="w-3 h-3"/>} Regenerate</button>}</div>
             {!team.project_roadmap || !team.project_roadmap.phases ? <div className="text-center py-20 bg-gray-900/30 rounded-3xl border border-gray-800/50"><Bot className="w-16 h-16 mx-auto text-gray-700 mb-4" /><p className="text-gray-500 mb-6">No roadmap yet.</p>{isLeader ? <button onClick={generateRoadmap} disabled={isGenerating} className="px-8 py-4 bg-purple-600 hover:bg-purple-700 rounded-full font-bold transition flex items-center gap-2 mx-auto">{isGenerating ? <Loader2 className="animate-spin" /> : <Sparkles className="w-5 h-5" />} Generate Plan</button> : <p className="text-sm text-gray-600">Waiting for team leader to generate plan.</p>}</div> : <div className="relative border-l-2 border-gray-800 ml-4 space-y-12 pb-12">{team.project_roadmap.phases.map((phase: any, i: number) => <motion.div key={i} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.2 }} className="relative pl-10"><div className="absolute -left-[9px] top-0 w-4 h-4 bg-purple-500 rounded-full border-4 border-gray-950 shadow-[0_0_10px_rgba(168,85,247,0.5)]"></div><div className="mb-2 flex items-center gap-3"><span className="text-purple-400 font-bold font-mono text-lg">Week {phase.week}</span><span className="text-gray-600">|</span><h3 className="text-xl font-semibold text-white">{phase.goal}</h3></div><div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">{phase.tasks.map((task: any, j: number) => <div key={j} className="bg-gray-900 border border-gray-800 p-4 rounded-xl flex gap-4 hover:border-gray-700 transition"><div className="mt-1">{task.role.toLowerCase().includes('front') ? <LayoutDashboard className="w-5 h-5 text-blue-400" /> : task.role.toLowerCase().includes('back') ? <Code2 className="w-5 h-5 text-green-400" /> : <Layers className="w-5 h-5 text-orange-400" />}</div><div><span className="text-xs font-mono text-gray-500 uppercase tracking-wider block mb-1">{task.role}</span><p className="text-gray-300 text-sm leading-relaxed">{task.task}</p></div></div>)}</div></motion.div>)}</div>}
@@ -188,46 +174,7 @@ export default function TeamDetails() {
       </div>
       
       {/* Email Modal */}
-      <AnimatePresence>
-        {showEmailModal && emailRecipient && (
-          <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-gray-900 border border-gray-800 p-8 rounded-2xl w-full max-w-md relative">
-                <div className="flex justify-between items-center mb-6">
-                    <h2 className="text-xl font-bold flex items-center gap-2"><Mail className="w-5 h-5"/> Send Secure Message</h2>
-                    <button onClick={() => setShowEmailModal(false)}><X className="text-gray-500 hover:text-white"/></button>
-                </div>
-                
-                <div className="space-y-4">
-                    <div className="bg-gray-800/50 p-3 rounded-lg text-sm text-gray-400">
-                        To: <span className="text-white font-bold">{emailRecipient.name}</span> (Email Hidden)
-                    </div>
-                    <div>
-                        <label className="block text-xs text-gray-500 mb-1 uppercase tracking-wider">Subject</label>
-                        <input 
-                            className="w-full bg-gray-950 border border-gray-800 rounded-lg p-3 outline-none focus:border-green-500" 
-                            placeholder="e.g. Discussing the project..." 
-                            value={emailSubject} 
-                            onChange={e => setEmailSubject(e.target.value)} 
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-xs text-gray-500 mb-1 uppercase tracking-wider">Message</label>
-                        <textarea 
-                            className="w-full bg-gray-950 border border-gray-800 rounded-lg p-3 h-32 outline-none focus:border-green-500 resize-none" 
-                            placeholder="Hi, I'd like to discuss..." 
-                            value={emailBody} 
-                            onChange={e => setEmailBody(e.target.value)} 
-                        />
-                    </div>
-                    
-                    <button onClick={handleSendEmail} className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-3 rounded-lg transition flex items-center justify-center gap-2">
-                        <Send className="w-4 h-4"/> Send Message
-                    </button>
-                </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <AnimatePresence>{showEmailModal && emailRecipient && (<div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"><motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-gray-900 border border-gray-800 p-8 rounded-2xl w-full max-w-md relative"><div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold flex items-center gap-2"><Mail className="w-5 h-5"/> Send Secure Message</h2><button onClick={() => setShowEmailModal(false)}><X className="text-gray-500 hover:text-white"/></button></div><div className="space-y-4 mt-4"><div className="bg-gray-800/50 p-3 rounded-lg text-sm text-gray-400">To: <span className="text-white font-bold">{emailRecipient.name}</span> (Email Hidden)</div><input className="w-full bg-gray-950 border border-gray-800 rounded-lg p-3 outline-none focus:border-green-500" placeholder="Subject" value={emailSubject} onChange={e => setEmailSubject(e.target.value)} /><textarea className="w-full bg-gray-950 border border-gray-800 rounded-lg p-3 h-32 outline-none focus:border-green-500 resize-none" placeholder="Message" value={emailBody} onChange={e => setEmailBody(e.target.value)} /><button onClick={handleSendEmail} className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2"><Send className="w-4 h-4"/> Send Message</button></div></motion.div></div>)}</AnimatePresence>
     </div>
   );
 }

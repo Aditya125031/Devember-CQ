@@ -94,3 +94,13 @@ class ChatGroup(Document):
     avatar_url: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.now)
     class Settings: name = "chat_groups"
+
+class Question(Document):
+    skill: str # "Python", "React"
+    text: str
+    options: List[str] # ["A", "B", "C", "D"]
+    correct_index: int
+    difficulty: str # "easy", "medium", "hard"
+    
+    class Settings:
+        name = "questions"
