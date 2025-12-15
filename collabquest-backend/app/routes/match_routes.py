@@ -29,12 +29,11 @@ class MatchResponse(BaseModel):
 
 async def create_match(user_id: str, project_id: str, leader_id: str):
     existing = await Match.find_one(Match.user_id == user_id, Match.project_id == project_id)
-    if existing: return True # Return True if match exists/created
+    if existing: return True
 
     await Match(user_id=user_id, project_id=project_id, leader_id=leader_id).insert()
     
     try:
-        # Notify Candidate
         await Notification(
             recipient_id=user_id, sender_id=leader_id, 
             message=f"You matched with a project!", type="match", related_id=project_id
@@ -43,7 +42,6 @@ async def create_match(user_id: str, project_id: str, leader_id: str):
         candidate = await User.get(user_id)
         c_name = candidate.username if candidate else "Someone"
         
-        # Notify Leader
         await Notification(
             recipient_id=leader_id, sender_id=user_id, 
             message=f"{c_name} matched with your project!", type="match", related_id=project_id
@@ -111,18 +109,14 @@ async def handle_swipe(data: SwipeRequest, current_user: User = Depends(get_curr
             Swipe.target_id == data.target_id
         ).sort("-timestamp").first_or_none()
 
-        # RETRY LOGIC: If previously swiped Right, check if we missed a match (maybe leader liked us later)
+        # Retry logic: If swiped right before, try to match again (in case other party swiped right later)
         if last_swipe and last_swipe.direction == "right" and data.direction == "right":
             if data.type == "project":
                 project = await Team.get(data.target_id)
                 if project and project.members:
                     leader_id = project.members[0]
-                    # Check Leader's swipe
-                    reverse = await Swipe.find_one(
-                        Swipe.swiper_id == leader_id,
-                        Swipe.target_id == str(current_user.id),
-                        Swipe.direction == "right"
-                    )
+                    # Check if Leader swiped User
+                    reverse = await Swipe.find_one(Swipe.swiper_id == leader_id, Swipe.target_id == str(current_user.id), Swipe.direction == "right")
                     if reverse:
                         await create_match(str(current_user.id), str(project.id), leader_id)
                         return {"status": "liked", "is_match": True}
@@ -147,15 +141,16 @@ async def handle_swipe(data: SwipeRequest, current_user: User = Depends(get_curr
         is_match = False
         
         if data.type == "project":
+            # User swiping Project
             project = await Team.get(data.target_id)
             if project and project.members:
                 leader_id = project.members[0]
                 
+                # Check if Leader previously swiped User
                 reverse_swipe = await Swipe.find_one(
                     Swipe.swiper_id == leader_id,
                     Swipe.target_id == str(current_user.id),
-                    Swipe.direction == "right",
-                    Or(Swipe.related_id == str(project.id), Swipe.related_id == None)
+                    Swipe.direction == "right"
                 )
                 
                 if reverse_swipe:
@@ -169,10 +164,12 @@ async def handle_swipe(data: SwipeRequest, current_user: User = Depends(get_curr
                     ).insert()
 
         elif data.type == "user":
+            # Leader swiping User
             target_user_id = data.target_id
             target_project_id = data.related_id 
             
             if target_project_id:
+                # Specific project context
                 reverse_swipe = await Swipe.find_one(
                     Swipe.swiper_id == target_user_id,
                     Swipe.target_id == target_project_id,
@@ -190,8 +187,12 @@ async def handle_swipe(data: SwipeRequest, current_user: User = Depends(get_curr
                         type="like", related_id=target_project_id
                     ).insert()
             else:
+                # Generic swipe by Leader (Try to match with any of their projects)
                 my_projects = await Team.find(Team.members == str(current_user.id)).to_list()
+                
+                matched = False
                 for project in my_projects:
+                    # Check if User swiped this Project
                     reverse_swipe = await Swipe.find_one(
                         Swipe.swiper_id == target_user_id, 
                         Swipe.target_id == str(project.id), 
@@ -200,7 +201,25 @@ async def handle_swipe(data: SwipeRequest, current_user: User = Depends(get_curr
                     if reverse_swipe:
                         is_match = True
                         await create_match(target_user_id, str(project.id), str(current_user.id))
-                        break
+                        matched = True
+                        break # Stop after first match
+                
+                if not matched and my_projects:
+                    # Send generic notification if no immediate match
+                    primary_project = my_projects[0]
+                    existing_notif = await Notification.find_one(
+                        Notification.recipient_id == target_user_id,
+                        Notification.sender_id == str(current_user.id),
+                        Notification.type == "like"
+                    )
+                    if not existing_notif:
+                        await Notification(
+                            recipient_id=target_user_id, 
+                            sender_id=str(current_user.id),
+                            message=f"A Team Leader ({current_user.username}) is interested in you!",
+                            type="like", 
+                            related_id=str(primary_project.id)
+                        ).insert()
 
         return {"status": "liked", "is_match": is_match}
 
@@ -286,12 +305,8 @@ async def get_team_matches(team_id: str, current_user: User = Depends(get_curren
             })
     return results
 
-# --- FIXED DELETE ROUTE (Added /delete prefix to match frontend) ---
 @router.delete("/delete/{project_id}/{user_id}")
 async def delete_match_entry(project_id: str, user_id: str, current_user: User = Depends(get_current_user)):
-    """
-    Completely removes a match and associated likes/swipes.
-    """
     await Match.find(
         Match.project_id == project_id, 
         Match.user_id == user_id

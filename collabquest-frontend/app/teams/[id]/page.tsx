@@ -23,7 +23,8 @@ interface Team {
     target_members: number; target_completion_date?: string; 
     deletion_request?: DeletionRequest;
     completion_request?: CompletionRequest;
-    status: string; // "active" | "completed"
+    status: string; 
+    has_liked?: boolean; // <--- NEW
 }
 
 interface Suggestions { add: string[]; remove: string[]; }
@@ -48,7 +49,7 @@ export default function TeamDetails() {
   const [deletionProcessing, setDeletionProcessing] = useState(false);
   const [completionProcessing, setCompletionProcessing] = useState(false);
   const [ratingProcessing, setRatingProcessing] = useState<string | null>(null);
-  const [ratedMembers, setRatedMembers] = useState<string[]>([]); // Track locally who we rated
+  const [ratedMembers, setRatedMembers] = useState<string[]>([]); 
 
   // AI & Skills State
   const [isGenerating, setIsGenerating] = useState(false);
@@ -73,26 +74,39 @@ export default function TeamDetails() {
          .then(res => setCurrentUserId(res.data._id || res.data.id));
     fetchTeamData(token);
     
-    // Auto-refresh when notifications indicate updates
     const handleRefresh = () => { if(token) { fetchTeamData(token); fetchCandidates(token, teamId); } };
     window.addEventListener("dashboardUpdate", handleRefresh);
     return () => window.removeEventListener("dashboardUpdate", handleRefresh);
   }, [teamId]);
 
+  useEffect(() => {
+      if (!loading && team && currentUserId) {
+          const isMember = team.members.some(m => m.id === currentUserId);
+          const isLeader = team.leader_id === currentUserId;
+          // Only enforce access if team is active/completed but not deleted (deleted usually 404s)
+          if (!isMember && !isLeader) {
+              // But non-members CAN view this page to join/like!
+              // So we ONLY redirect if they were REMOVED? 
+              // Actually, the page IS the marketplace detail view. Everyone should see it.
+              // So REMOVING the strict redirect logic unless specifically required for "private" teams.
+              // For now, let's keep it accessible.
+          }
+      }
+  }, [team, currentUserId, loading]);
+
   const fetchTeamData = async (token: string) => {
     try {
-      const res = await axios.get(`http://localhost:8000/teams/${teamId}`);
+      const res = await axios.get(`http://localhost:8000/teams/${teamId}`, { 
+          headers: { Authorization: `Bearer ${token}` } // Send token to get has_liked status
+      });
       setTeam(res.data);
       setLocalSkills(res.data.needed_skills || []);
-      
-      // Initialize Edit Fields
       setEditName(res.data.name);
       setEditDesc(res.data.description);
       setEditTargetMembers(res.data.target_members || 4);
       if(res.data.target_completion_date) {
           setEditTargetDate(new Date(res.data.target_completion_date).toISOString().split('T')[0]);
       }
-
       if (res.data.leader_id) fetchCandidates(token, res.data.id); 
     } catch (err) { console.error(err); } finally { setLoading(false); }
   };
@@ -107,7 +121,6 @@ export default function TeamDetails() {
   const isLeader = team && currentUserId === team.leader_id;
   const isMember = team && team.members.some(m => m.id === currentUserId);
 
-  // --- EDIT PROJECT DETAILS ---
   const saveDetails = async () => {
       const token = Cookies.get("token");
       try {
@@ -122,20 +135,17 @@ export default function TeamDetails() {
       } catch(e) { alert("Failed to update"); }
   };
 
-  // --- DELETION LOGIC ---
   const handleInitiateDelete = async () => {
       if(!confirm("Start a vote to delete this project? Requires 70% consensus.")) return;
       const token = Cookies.get("token");
       try {
           setDeletionProcessing(true);
           const res = await axios.post(`http://localhost:8000/teams/${teamId}/delete/initiate`, {}, { headers: { Authorization: `Bearer ${token}` } });
-          
           if (res.data.status === "deleted") {
               alert("Team deleted successfully!");
               router.push("/dashboard");
               return;
           }
-
           alert("Vote initiated!");
           fetchTeamData(token!);
           window.dispatchEvent(new Event("triggerNotificationRefresh"));
@@ -158,7 +168,6 @@ export default function TeamDetails() {
       } catch(e) { alert("Failed"); } finally { setDeletionProcessing(false); }
   };
 
-  // --- COMPLETION LOGIC ---
   const handleInitiateComplete = async () => {
       if(!confirm("Mark project as completed? Requires 70% consensus.")) return;
       const token = Cookies.get("token");
@@ -197,57 +206,34 @@ export default function TeamDetails() {
       } catch(e) { alert("Failed to rate"); } finally { setRatingProcessing(null); }
   }
 
-  // --- CANDIDATE & TEAM ACTIONS ---
   const sendInvite = async (c: Candidate) => { const token = Cookies.get("token"); try { setCandidates(prev => prev.map(m => m.id === c.id ? { ...m, status: "invited" } : m)); await axios.post(`http://localhost:8000/teams/${teamId}/invite`, { target_user_id: c.id }, { headers: { Authorization: `Bearer ${token}` } }); } catch (err) { alert("Failed"); fetchCandidates(token!, teamId); } }
-  
-  const acceptRequest = async (c: Candidate) => { 
-      const token = Cookies.get("token"); 
-      try { 
-          await axios.post(`http://localhost:8000/teams/${teamId}/members`, { target_user_id: c.id }, { headers: { Authorization: `Bearer ${token}` } }); 
-          window.dispatchEvent(new Event("triggerNotificationRefresh")); 
-          fetchTeamData(token!); 
-          fetchCandidates(token!, teamId); 
-      } catch (err) { alert("Failed"); } 
-  }
-  
-  const rejectRequest = async (c: Candidate) => { 
-      if(!confirm("Reject?")) return; 
-      const token = Cookies.get("token"); 
-      try { 
-          await axios.post(`http://localhost:8000/teams/${teamId}/reject`, { target_user_id: c.id }, { headers: { Authorization: `Bearer ${token}` } }); 
-          window.dispatchEvent(new Event("triggerNotificationRefresh")); 
-          fetchCandidates(token!, teamId); 
-      } catch (err) { alert("Failed"); } 
-  }
-  
-  const deleteCandidate = async (c: Candidate) => { 
-      if(!confirm("Remove from list?")) return; 
-      const token = Cookies.get("token"); 
-      try { 
-          await axios.delete(`http://localhost:8000/matches/delete/${teamId}/${c.id}`, { headers: { Authorization: `Bearer ${token}` } }); 
-          fetchCandidates(token!, teamId); 
-      } catch (err) { alert("Failed"); } 
-  }
-
+  const acceptRequest = async (c: Candidate) => { const token = Cookies.get("token"); try { await axios.post(`http://localhost:8000/teams/${teamId}/members`, { target_user_id: c.id }, { headers: { Authorization: `Bearer ${token}` } }); window.dispatchEvent(new Event("triggerNotificationRefresh")); fetchTeamData(token!); fetchCandidates(token!, teamId); } catch (err) { alert("Failed"); } }
+  const rejectRequest = async (c: Candidate) => { if(!confirm("Reject?")) return; const token = Cookies.get("token"); try { await axios.post(`http://localhost:8000/teams/${teamId}/reject`, { target_user_id: c.id }, { headers: { Authorization: `Bearer ${token}` } }); window.dispatchEvent(new Event("triggerNotificationRefresh")); fetchCandidates(token!, teamId); } catch (err) { alert("Failed"); } }
+  const deleteCandidate = async (c: Candidate) => { if(!confirm("Remove from list?")) return; const token = Cookies.get("token"); try { await axios.delete(`http://localhost:8000/matches/delete/${teamId}/${c.id}`, { headers: { Authorization: `Bearer ${token}` } }); fetchCandidates(token!, teamId); } catch (err) { alert("Failed"); } }
   const createTeamChat = async () => { const token = Cookies.get("token"); try { const res = await axios.post(`http://localhost:8000/chat/groups/team/${teamId}`, {}, { headers: { Authorization: `Bearer ${token}` } }); router.push(`/chat?targetId=${res.data._id || res.data.id}`); } catch (err) { alert("Failed to create group"); } };
   const removeMember = async (memberId: string) => { if(!confirm("Remove?")) return; const token = Cookies.get("token"); try { await axios.delete(`http://localhost:8000/teams/${teamId}/members/${memberId}`, { headers: { Authorization: `Bearer ${token}` } }); if (token) fetchTeamData(token); } catch (err) { alert("Failed to remove"); } };
   
+  // --- UPDATED: LIKE FUNCTION WITH DISABLE STATE ---
   const likeProject = async () => { 
       const token = Cookies.get("token"); 
       try { 
           const res = await axios.post("http://localhost:8000/matches/swipe", { target_id: teamId, direction: "right", type: "project", related_id: teamId }, { headers: { Authorization: `Bearer ${token}` } }); 
-          if(res.data.status === "cooldown") alert("Wait a few days!"); 
-          else if (res.data.is_match) { 
+          
+          if(res.data.status === "cooldown") {
+              alert("You already liked this project! Please wait for a response."); 
+          } else if (res.data.is_match) { 
               alert("It's a Match! You have joined the team."); 
               fetchTeamData(token!); 
-          } else alert("Interest sent!"); 
+          } else {
+              alert("Interest sent! The leader will be notified.");
+              // Update local state to disable button immediately
+              if (team) setTeam({...team, has_liked: true});
+          }
       } catch (err) { alert("Failed"); } 
   }
   
   const openEmailComposer = (u: any) => { setEmailRecipient({ id: u.id, name: u.username || u.name }); setShowEmailModal(true); }
   const handleSendEmail = async () => { const token = Cookies.get("token"); if (!emailRecipient) return; try { await axios.post("http://localhost:8000/communication/send-email", { recipient_id: emailRecipient.id, subject: emailSubject, body: emailBody }, { headers: { Authorization: `Bearer ${token}` } }); alert("Email sent!"); setShowEmailModal(false); } catch (err) { alert("Failed"); } }
-  
-  // --- TECH STACK & ROADMAP HELPERS ---
   const addSkill = (skill: string) => { if (!localSkills.includes(skill)) setLocalSkills([...localSkills, skill]); setDropdownValue(""); };
   const removeSkill = (skill: string) => { setLocalSkills(localSkills.filter(s => s !== skill)); };
   const saveSkills = async () => { const token = Cookies.get("token"); try { await axios.put(`http://localhost:8000/teams/${teamId}/skills`, { needed_skills: localSkills }, { headers: { Authorization: `Bearer ${token}` } }); if (token) fetchTeamData(token); setIsEditingSkills(false); setSuggestions(null); } catch (err) { alert("Failed"); } };
@@ -385,7 +371,18 @@ export default function TeamDetails() {
 
             <div className="flex flex-col gap-2 items-end">
                 {isLeader && (<><Link href={`/matches?type=users&projectId=${team.id}`}><button className="w-full px-6 py-3 bg-white text-black rounded-lg font-bold hover:bg-gray-200 transition flex items-center justify-center gap-2 shadow-lg"><UserPlus className="w-5 h-5 text-purple-600" /> Recruit</button></Link><button onClick={team.chat_group_id ? () => router.push(`/chat?targetId=${team.chat_group_id}`) : createTeamChat} className="w-full px-6 py-3 bg-gray-800 text-blue-400 border border-blue-900 rounded-lg font-bold hover:bg-gray-700 transition flex items-center justify-center gap-2"><MessageSquare className="w-5 h-5" /> {team.chat_group_id ? "Open Team Chat" : "Create Team Chat"}</button></>)}
-                {!isMember && <button onClick={likeProject} className="w-full px-6 py-3 bg-purple-600 text-white rounded-lg font-bold hover:bg-purple-500 transition flex items-center justify-center gap-2 shadow-lg"><ThumbsUp className="w-5 h-5" /> I'm Interested</button>}
+                
+                {/* --- INTERESTED BUTTON: Logic Updated --- */}
+                {!isMember && (
+                    <button 
+                        onClick={likeProject} 
+                        disabled={team.has_liked} // Disabled if already liked
+                        className={`w-full px-6 py-3 rounded-lg font-bold transition flex items-center justify-center gap-2 shadow-lg ${team.has_liked ? 'bg-gray-800 text-gray-500 cursor-not-allowed' : 'bg-purple-600 text-white hover:bg-purple-500'}`}
+                    >
+                        <ThumbsUp className="w-5 h-5" /> {team.has_liked ? "Interest Sent" : "I'm Interested"}
+                    </button>
+                )}
+
                 {isMember && !isLeader && team.chat_group_id && <button onClick={() => router.push(`/chat?targetId=${team.chat_group_id}`)} className="w-full px-6 py-3 bg-gray-800 text-blue-400 border border-blue-900 rounded-lg font-bold hover:bg-gray-700 transition flex items-center justify-center gap-2"><MessageSquare className="w-5 h-5" /> Team Chat</button>}
                 
                 {/* MARK COMPLETED BUTTON */}
@@ -396,7 +393,7 @@ export default function TeamDetails() {
                 )}
 
                 {/* DELETE BUTTON */}
-                {isLeader && team.status === 'active' && !team.deletion_request?.is_active && !team.completion_request?.is_active && (
+                {isLeader && !team.deletion_request?.is_active && !team.completion_request?.is_active && (
                     <button onClick={handleInitiateDelete} className="text-xs text-red-500 hover:text-red-400 flex items-center gap-1 mt-4 px-3 py-1 border border-red-900/50 rounded bg-red-900/10">
                         <Trash2 className="w-3 h-3"/> Delete Project
                     </button>
@@ -406,6 +403,7 @@ export default function TeamDetails() {
           
           {/* Tech Stack & Team Members Grid */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* ... (Same as before) ... */}
               <div className="md:col-span-2 bg-gray-900/50 p-6 rounded-2xl border border-gray-800">
                 <div className="flex justify-between items-center mb-4"><h3 className="font-bold flex items-center gap-2"><Code2 className="text-purple-400 w-5 h-5" /> Tech Stack</h3>{isLeader && !isEditingSkills && <button onClick={() => setIsEditingSkills(true)} className="text-xs text-purple-400 hover:text-purple-300 font-mono border border-purple-500/30 px-3 py-1 rounded">Edit Stack</button>}{isEditingSkills && <div className="flex gap-2"><button onClick={askAiForStack} disabled={isSuggesting} className="text-xs bg-blue-600 text-white px-3 py-1 rounded flex gap-1">{isSuggesting ? <Loader2 className="w-3 h-3 animate-spin"/> : <Sparkles className="w-3 h-3"/>} AI</button><button onClick={saveSkills} className="text-xs bg-green-600 text-white px-3 py-1 rounded">Save</button></div>}</div>
                 {isEditingSkills && suggestions && (suggestions.add.length > 0 || suggestions.remove.length > 0) && (<motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} className="mb-4 bg-black/40 border border-blue-500/30 rounded-xl p-3"><h4 className="text-[10px] font-bold text-blue-400 mb-2 uppercase">AI Suggestions</h4><div className="flex flex-wrap gap-2">{suggestions.add.map(s => <div key={s} className="flex items-center gap-1 bg-blue-900/20 border border-blue-500/50 px-2 py-1 rounded text-xs text-blue-200">{s} <button onClick={() => acceptSuggestion('add', s)}><Check className="w-3 h-3 text-green-400"/></button></div>)}{suggestions.remove.map(s => <div key={s} className="flex items-center gap-1 bg-red-900/20 border border-red-500/50 px-2 py-1 rounded text-xs text-red-200">{s} <button onClick={() => acceptSuggestion('remove', s)}><Check className="w-3 h-3 text-red-400"/></button></div>)}</div></motion.div>)}
@@ -418,7 +416,7 @@ export default function TeamDetails() {
           </div>
         </header>
 
-        {/* --- INTERESTED CANDIDATES SECTION (FIXED UI) --- */}
+        {/* --- INTERESTED CANDIDATES SECTION --- */}
         {isLeader && candidates.length > 0 && (
             <div className="mb-12 bg-gray-900 border border-blue-900/30 p-8 rounded-2xl">
                  <h3 className="text-xl font-bold mb-6 flex items-center gap-2 text-blue-300"><UserPlus className="w-5 h-5"/> Interested Candidates</h3>
