@@ -8,18 +8,24 @@ import GlobalHeader from "@/components/GlobalHeader";
 import Link from "next/link";
 import { 
   Bot, Calendar, Code2, Layers, LayoutDashboard, Loader2, UserPlus, 
-  Sparkles, X, Plus, RefreshCw, Trash2, Check, AlertTriangle, MessageSquare, Mail, ThumbsUp, XCircle, Clock, Send, Edit2, Save, Users
+  Sparkles, X, Plus, RefreshCw, Trash2, Check, AlertTriangle, MessageSquare, Mail, ThumbsUp, XCircle, Clock, Send, Edit2, Save, Users, Trophy, Star
 } from "lucide-react";
 
 const PRESET_SKILLS = ["React", "Python", "Node.js", "TypeScript", "Next.js", "Tailwind", "MongoDB", "Firebase", "Flutter", "Java", "C++", "Rust", "Go", "Figma", "UI/UX", "AI/ML", "Docker", "AWS", "Solidity"];
+
 interface Member { id: string; username: string; avatar_url: string; email: string; }
 interface DeletionRequest { is_active: boolean; votes: {[key:string]: string}; }
+interface CompletionRequest { is_active: boolean; votes: {[key:string]: string}; }
+
 interface Team { 
     id: string; name: string; description: string; leader_id: string; 
     members: Member[]; needed_skills: string[]; project_roadmap?: any; chat_group_id?: string;
     target_members: number; target_completion_date?: string; 
     deletion_request?: DeletionRequest;
+    completion_request?: CompletionRequest;
+    status: string; // "active" | "completed"
 }
+
 interface Suggestions { add: string[]; remove: string[]; }
 interface Candidate { id: string; name: string; avatar: string; contact: string; role: string; status: string; rejected_by?: string; }
 
@@ -37,14 +43,22 @@ export default function TeamDetails() {
   const [editDesc, setEditDesc] = useState("");
   const [editTargetMembers, setEditTargetMembers] = useState(4);
   const [editTargetDate, setEditTargetDate] = useState("");
+  
+  // Action Processing States
   const [deletionProcessing, setDeletionProcessing] = useState(false);
+  const [completionProcessing, setCompletionProcessing] = useState(false);
+  const [ratingProcessing, setRatingProcessing] = useState<string | null>(null);
+  const [ratedMembers, setRatedMembers] = useState<string[]>([]); // Track locally who we rated
 
+  // AI & Skills State
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [suggestions, setSuggestions] = useState<Suggestions | null>(null); 
   const [isEditingSkills, setIsEditingSkills] = useState(false);
   const [localSkills, setLocalSkills] = useState<string[]>([]);
   const [dropdownValue, setDropdownValue] = useState("");
+  
+  // Modal State
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [emailRecipient, setEmailRecipient] = useState<{id: string, name: string} | null>(null);
   const [emailSubject, setEmailSubject] = useState("");
@@ -59,6 +73,7 @@ export default function TeamDetails() {
          .then(res => setCurrentUserId(res.data._id || res.data.id));
     fetchTeamData(token);
     
+    // Auto-refresh when notifications indicate updates
     const handleRefresh = () => { if(token) { fetchTeamData(token); fetchCandidates(token, teamId); } };
     window.addEventListener("dashboardUpdate", handleRefresh);
     return () => window.removeEventListener("dashboardUpdate", handleRefresh);
@@ -70,7 +85,7 @@ export default function TeamDetails() {
       setTeam(res.data);
       setLocalSkills(res.data.needed_skills || []);
       
-      // Init Edit Form
+      // Initialize Edit Fields
       setEditName(res.data.name);
       setEditDesc(res.data.description);
       setEditTargetMembers(res.data.target_members || 4);
@@ -92,6 +107,7 @@ export default function TeamDetails() {
   const isLeader = team && currentUserId === team.leader_id;
   const isMember = team && team.members.some(m => m.id === currentUserId);
 
+  // --- EDIT PROJECT DETAILS ---
   const saveDetails = async () => {
       const token = Cookies.get("token");
       try {
@@ -106,6 +122,7 @@ export default function TeamDetails() {
       } catch(e) { alert("Failed to update"); }
   };
 
+  // --- DELETION LOGIC ---
   const handleInitiateDelete = async () => {
       if(!confirm("Start a vote to delete this project? Requires 70% consensus.")) return;
       const token = Cookies.get("token");
@@ -113,11 +130,10 @@ export default function TeamDetails() {
           setDeletionProcessing(true);
           const res = await axios.post(`http://localhost:8000/teams/${teamId}/delete/initiate`, {}, { headers: { Authorization: `Bearer ${token}` } });
           
-          // FIX: Check for immediate deletion status (Single Member case)
           if (res.data.status === "deleted") {
               alert("Team deleted successfully!");
               router.push("/dashboard");
-              return; // Stop execution so we don't fetch deleted data
+              return;
           }
 
           alert("Vote initiated!");
@@ -142,7 +158,46 @@ export default function TeamDetails() {
       } catch(e) { alert("Failed"); } finally { setDeletionProcessing(false); }
   };
 
-  // --- ACTIONS ---
+  // --- COMPLETION LOGIC ---
+  const handleInitiateComplete = async () => {
+      if(!confirm("Mark project as completed? Requires 70% consensus.")) return;
+      const token = Cookies.get("token");
+      try {
+          setCompletionProcessing(true);
+          const res = await axios.post(`http://localhost:8000/teams/${teamId}/complete/initiate`, {}, { headers: { Authorization: `Bearer ${token}` } });
+          if(res.data.status === 'completed') { alert("Project Completed!"); } 
+          else { alert("Vote initiated!"); }
+          fetchTeamData(token!);
+          window.dispatchEvent(new Event("triggerNotificationRefresh"));
+      } catch(e) { alert("Failed"); } finally { setCompletionProcessing(false); }
+  }
+
+  const handleVoteComplete = async (decision: 'approve' | 'reject') => {
+      const token = Cookies.get("token");
+      try {
+          setCompletionProcessing(true);
+          const res = await axios.post(`http://localhost:8000/teams/${teamId}/complete/vote`, { decision }, { headers: { Authorization: `Bearer ${token}` } });
+          if (res.data.status === "completed") {
+              alert("Project Marked as Completed!");
+          } else {
+              alert("Vote recorded.");
+          }
+          fetchTeamData(token!);
+          window.dispatchEvent(new Event("triggerNotificationRefresh"));
+      } catch(e) { alert("Failed"); } finally { setCompletionProcessing(false); }
+  };
+
+  const handleRateMember = async (targetId: string, score: number) => {
+      const token = Cookies.get("token");
+      setRatingProcessing(targetId);
+      try {
+          await axios.post(`http://localhost:8000/teams/${teamId}/rate`, { target_user_id: targetId, score }, { headers: { Authorization: `Bearer ${token}` } });
+          setRatedMembers([...ratedMembers, targetId]);
+          alert("Rating submitted!");
+      } catch(e) { alert("Failed to rate"); } finally { setRatingProcessing(null); }
+  }
+
+  // --- CANDIDATE & TEAM ACTIONS ---
   const sendInvite = async (c: Candidate) => { const token = Cookies.get("token"); try { setCandidates(prev => prev.map(m => m.id === c.id ? { ...m, status: "invited" } : m)); await axios.post(`http://localhost:8000/teams/${teamId}/invite`, { target_user_id: c.id }, { headers: { Authorization: `Bearer ${token}` } }); } catch (err) { alert("Failed"); fetchCandidates(token!, teamId); } }
   
   const acceptRequest = async (c: Candidate) => { 
@@ -191,6 +246,8 @@ export default function TeamDetails() {
   
   const openEmailComposer = (u: any) => { setEmailRecipient({ id: u.id, name: u.username || u.name }); setShowEmailModal(true); }
   const handleSendEmail = async () => { const token = Cookies.get("token"); if (!emailRecipient) return; try { await axios.post("http://localhost:8000/communication/send-email", { recipient_id: emailRecipient.id, subject: emailSubject, body: emailBody }, { headers: { Authorization: `Bearer ${token}` } }); alert("Email sent!"); setShowEmailModal(false); } catch (err) { alert("Failed"); } }
+  
+  // --- TECH STACK & ROADMAP HELPERS ---
   const addSkill = (skill: string) => { if (!localSkills.includes(skill)) setLocalSkills([...localSkills, skill]); setDropdownValue(""); };
   const removeSkill = (skill: string) => { setLocalSkills(localSkills.filter(s => s !== skill)); };
   const saveSkills = async () => { const token = Cookies.get("token"); try { await axios.put(`http://localhost:8000/teams/${teamId}/skills`, { needed_skills: localSkills }, { headers: { Authorization: `Bearer ${token}` } }); if (token) fetchTeamData(token); setIsEditingSkills(false); setSuggestions(null); } catch (err) { alert("Failed"); } };
@@ -204,10 +261,9 @@ export default function TeamDetails() {
   return (
     <div className="min-h-screen bg-gray-950 text-white">
       <GlobalHeader />
-      
       <div className="max-w-6xl mx-auto p-8">
         
-        {/* --- DELETION CONSENSUS PANEL --- */}
+        {/* --- DELETION VOTE PANEL --- */}
         {team?.deletion_request?.is_active && (
             <div className="mb-8 bg-red-900/20 border border-red-500/50 p-6 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-4">
                 <div className="flex items-center gap-4">
@@ -219,21 +275,73 @@ export default function TeamDetails() {
                         </p>
                     </div>
                 </div>
-                
                 {team.deletion_request.votes[currentUserId] ? (
                     <div className="text-gray-400 text-sm font-bold bg-gray-800 px-4 py-2 rounded-lg">
                         You voted: <span className={team.deletion_request.votes[currentUserId] === 'approve' ? "text-red-400" : "text-green-400"}>{team.deletion_request.votes[currentUserId].toUpperCase()}</span>
                     </div>
                 ) : (
                     <div className="flex gap-3">
-                        <button onClick={() => handleVoteDelete('approve')} disabled={deletionProcessing} className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-bold text-sm flex items-center gap-2">
-                            {deletionProcessing ? <Loader2 className="animate-spin w-4 h-4"/> : <Trash2 className="w-4 h-4"/>} Vote Delete
-                        </button>
-                        <button onClick={() => handleVoteDelete('reject')} disabled={deletionProcessing} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg font-bold text-sm">
-                            Keep Project
-                        </button>
+                        <button onClick={() => handleVoteDelete('approve')} disabled={deletionProcessing} className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-bold text-sm flex items-center gap-2">{deletionProcessing ? <Loader2 className="animate-spin w-4 h-4"/> : <Trash2 className="w-4 h-4"/>} Vote Delete</button>
+                        <button onClick={() => handleVoteDelete('reject')} disabled={deletionProcessing} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg font-bold text-sm">Keep Project</button>
                     </div>
                 )}
+            </div>
+        )}
+
+        {/* --- COMPLETION VOTE PANEL --- */}
+        {team.status === 'active' && team.completion_request?.is_active && (
+            <div className="mb-8 bg-green-900/20 border border-green-500/50 p-6 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-4">
+                <div className="flex items-center gap-4">
+                    <div className="p-3 bg-green-500/20 rounded-full text-green-400"><Check className="w-6 h-6"/></div>
+                    <div>
+                        <h3 className="text-lg font-bold text-green-400">Vote to Complete Project</h3>
+                        <p className="text-sm text-gray-400">
+                            {Object.values(team.completion_request.votes).filter(v => v === 'approve').length} / {Math.ceil(team.members.length * 0.7)} votes to complete.
+                        </p>
+                    </div>
+                </div>
+                {team.completion_request.votes[currentUserId] ? (
+                    <div className="text-gray-400 text-sm font-bold bg-gray-800 px-4 py-2 rounded-lg">
+                        You voted: <span className={team.completion_request.votes[currentUserId] === 'approve' ? "text-green-400" : "text-red-400"}>{team.completion_request.votes[currentUserId].toUpperCase()}</span>
+                    </div>
+                ) : (
+                    <div className="flex gap-3">
+                        <button onClick={() => handleVoteComplete('approve')} disabled={completionProcessing} className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg font-bold text-sm flex items-center gap-2">{completionProcessing ? <Loader2 className="animate-spin w-4 h-4"/> : <Check className="w-4 h-4"/>} Confirm</button>
+                        <button onClick={() => handleVoteComplete('reject')} disabled={completionProcessing} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg font-bold text-sm">Reject</button>
+                    </div>
+                )}
+            </div>
+        )}
+
+        {/* --- PROJECT COMPLETED: RATING UI --- */}
+        {team.status === 'completed' && (
+            <div className="mb-8 bg-gradient-to-r from-yellow-900/30 to-purple-900/30 border border-yellow-500/30 p-8 rounded-2xl text-center">
+                <div className="inline-block p-4 bg-yellow-500/20 rounded-full mb-4"><Trophy className="w-12 h-12 text-yellow-400"/></div>
+                <h2 className="text-3xl font-extrabold text-white mb-2">Project Completed!</h2>
+                <p className="text-gray-400 mb-8">Congratulations! Please rate your teammates to update their Trust Score.</p>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 text-left">
+                    {team.members.filter(m => m.id !== currentUserId).map(m => (
+                        <div key={m.id} className="bg-gray-900 border border-gray-800 p-4 rounded-xl flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <img src={m.avatar_url || "https://github.com/shadcn.png"} className="w-10 h-10 rounded-full"/>
+                                <span className="font-bold">{m.username}</span>
+                            </div>
+                            
+                            {ratedMembers.includes(m.id) ? (
+                                <span className="text-green-400 text-xs font-bold flex items-center gap-1"><Check className="w-3 h-3"/> Rated</span>
+                            ) : (
+                                <div className="flex gap-1">
+                                    {[10, 8, 5].map(score => (
+                                        <button key={score} onClick={() => handleRateMember(m.id, score)} disabled={!!ratingProcessing} className={`p-1.5 rounded bg-gray-800 hover:bg-yellow-600/50 border border-gray-700 text-xs font-mono transition ${ratingProcessing===m.id?'opacity-50':''}`}>
+                                            {score}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    ))}
+                </div>
             </div>
         )}
 
@@ -280,7 +388,15 @@ export default function TeamDetails() {
                 {!isMember && <button onClick={likeProject} className="w-full px-6 py-3 bg-purple-600 text-white rounded-lg font-bold hover:bg-purple-500 transition flex items-center justify-center gap-2 shadow-lg"><ThumbsUp className="w-5 h-5" /> I'm Interested</button>}
                 {isMember && !isLeader && team.chat_group_id && <button onClick={() => router.push(`/chat?targetId=${team.chat_group_id}`)} className="w-full px-6 py-3 bg-gray-800 text-blue-400 border border-blue-900 rounded-lg font-bold hover:bg-gray-700 transition flex items-center justify-center gap-2"><MessageSquare className="w-5 h-5" /> Team Chat</button>}
                 
-                {isLeader && !team?.deletion_request?.is_active && (
+                {/* MARK COMPLETED BUTTON */}
+                {isLeader && team.status === 'active' && !team.completion_request?.is_active && !team.deletion_request?.is_active && (
+                    <button onClick={handleInitiateComplete} className="w-full px-6 py-3 bg-green-600 text-white rounded-lg font-bold hover:bg-green-500 transition flex items-center justify-center gap-2 shadow-lg mt-2">
+                        <Check className="w-5 h-5" /> Mark Completed
+                    </button>
+                )}
+
+                {/* DELETE BUTTON */}
+                {isLeader && team.status === 'active' && !team.deletion_request?.is_active && !team.completion_request?.is_active && (
                     <button onClick={handleInitiateDelete} className="text-xs text-red-500 hover:text-red-400 flex items-center gap-1 mt-4 px-3 py-1 border border-red-900/50 rounded bg-red-900/10">
                         <Trash2 className="w-3 h-3"/> Delete Project
                     </button>
@@ -288,6 +404,7 @@ export default function TeamDetails() {
             </div>
           </div>
           
+          {/* Tech Stack & Team Members Grid */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div className="md:col-span-2 bg-gray-900/50 p-6 rounded-2xl border border-gray-800">
                 <div className="flex justify-between items-center mb-4"><h3 className="font-bold flex items-center gap-2"><Code2 className="text-purple-400 w-5 h-5" /> Tech Stack</h3>{isLeader && !isEditingSkills && <button onClick={() => setIsEditingSkills(true)} className="text-xs text-purple-400 hover:text-purple-300 font-mono border border-purple-500/30 px-3 py-1 rounded">Edit Stack</button>}{isEditingSkills && <div className="flex gap-2"><button onClick={askAiForStack} disabled={isSuggesting} className="text-xs bg-blue-600 text-white px-3 py-1 rounded flex gap-1">{isSuggesting ? <Loader2 className="w-3 h-3 animate-spin"/> : <Sparkles className="w-3 h-3"/>} AI</button><button onClick={saveSkills} className="text-xs bg-green-600 text-white px-3 py-1 rounded">Save</button></div>}</div>
@@ -301,7 +418,7 @@ export default function TeamDetails() {
           </div>
         </header>
 
-        {/* --- INTERESTED CANDIDATES SECTION --- */}
+        {/* --- INTERESTED CANDIDATES SECTION (FIXED UI) --- */}
         {isLeader && candidates.length > 0 && (
             <div className="mb-12 bg-gray-900 border border-blue-900/30 p-8 rounded-2xl">
                  <h3 className="text-xl font-bold mb-6 flex items-center gap-2 text-blue-300"><UserPlus className="w-5 h-5"/> Interested Candidates</h3>

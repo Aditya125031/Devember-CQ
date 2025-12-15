@@ -3,13 +3,12 @@ from beanie import Document
 from pydantic import BaseModel, Field
 from datetime import datetime
 
-# --- NEW AVAILABILITY MODELS ---
 class TimeRange(BaseModel):
-    start: str # "14:00"
-    end: str   # "18:00"
+    start: str 
+    end: str 
 
 class DayAvailability(BaseModel):
-    day: str # "Monday", "Tuesday"
+    day: str 
     enabled: bool = False
     slots: List[TimeRange] = []
 
@@ -17,11 +16,17 @@ class Skill(BaseModel):
     name: str
     level: str
 
-# --- NEW: DELETION REQUEST MODEL ---
+# --- MODELS FOR VOTING ---
 class DeletionRequest(BaseModel):
     is_active: bool = False
     initiator_id: str
-    votes: Dict[str, str] = {} # user_id -> "approve" or "reject"
+    votes: Dict[str, str] = {} # user_id -> "approve" | "reject"
+    created_at: datetime = Field(default_factory=datetime.now)
+
+class CompletionRequest(BaseModel):
+    is_active: bool = False
+    initiator_id: str
+    votes: Dict[str, str] = {}
     created_at: datetime = Field(default_factory=datetime.now)
 
 class User(Document):
@@ -30,6 +35,7 @@ class User(Document):
     email: str
     avatar_url: Optional[str] = None
     trust_score: float = Field(default=5.0)
+    rating_count: int = Field(default=1) # <--- NEW: To track average
     is_verified_student: bool = False
     skills: List[Skill] = []
     interests: List[str] = [] 
@@ -48,11 +54,13 @@ class Team(Document):
     target_members: int = Field(default=4)
     target_completion_date: Optional[datetime] = None 
     
-    # --- NEW FIELD ---
+    status: str = "active" # <--- NEW: 'active' or 'completed'
     deletion_request: Optional[DeletionRequest] = None
+    completion_request: Optional[CompletionRequest] = None # <--- NEW
     
     class Settings: name = "teams"
 
+# ... (Keep Swipe, Match, Notification, Message, ChatGroup, Question unchanged) ...
 class Swipe(Document):
     swiper_id: str
     target_id: str
@@ -107,6 +115,4 @@ class Question(Document):
     options: List[str] # ["A", "B", "C", "D"]
     correct_index: int
     difficulty: str # "easy", "medium", "hard"
-    
-    class Settings:
-        name = "questions"
+    class Settings: name = "questions"
