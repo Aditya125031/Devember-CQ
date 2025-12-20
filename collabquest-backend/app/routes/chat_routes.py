@@ -171,7 +171,7 @@ async def get_conversations(current_user: User = Depends(get_current_user)):
                 "last_message": last_msg.content if last_msg else "No messages yet", 
                 "unread_count": badge,
                 "member_count": len(g.members),
-                "is_team_group": g.is_team_group # <--- ADDED THIS FIELD
+                "is_team_group": g.is_team_group
             })
 
         results.sort(key=lambda x: x["last_timestamp"], reverse=True)
@@ -232,8 +232,19 @@ async def get_chat_history(target_id: str, current_user: User = Depends(get_curr
         
     return {"messages": enriched_messages, "meta": meta}
 
-# ... (Groups CRUD routes from previous remain the same) ...
-# [Include get_group_details, update_group, remove_group_member, create_group, add_group_member, create_team_group, get_contacts]
+@router.get("/unread-count")
+async def get_total_unread(current_user: User = Depends(get_current_user)):
+    uid = str(current_user.id)
+    # 1. Unread DMs
+    dm_count = await Message.find({"recipient_id": uid, "is_read": {"$ne": True}}).count()
+    # 2. Unread Group Messages
+    group_counts = await UnreadCount.find(UnreadCount.user_id == uid).to_list(None)
+    total_group = sum([g.msg_count for g in group_counts])
+    
+    return {"count": dm_count + total_group}
+
+# ... Group CRUD ...
+
 @router.get("/groups/{group_id}")
 async def get_group_details(group_id: str, current_user: User = Depends(get_current_user)):
     group = await ChatGroup.get(group_id)
@@ -291,11 +302,18 @@ async def create_group(data: GroupCreate, current_user: User = Depends(get_curre
     await group.insert()
     return group
 
+# --- UPDATED: Add Member with Block Check ---
 @router.put("/groups/{group_id}/members")
 async def add_group_member(group_id: str, req: AddMemberRequest, current_user: User = Depends(get_current_user)):
     group = await ChatGroup.get(group_id)
     if not group: raise HTTPException(404, "Group not found")
     if group.admin_id != str(current_user.id): raise HTTPException(403, "Only admin can manage members")
+    
+    # CHECK BLOCK
+    is_blocked = await Block.find_one(Block.blocker_id == req.user_id, Block.blocked_id == group_id)
+    if is_blocked:
+        raise HTTPException(400, "User has blocked this group")
+
     if req.user_id not in group.members:
         group.members.append(req.user_id)
         await group.save()
@@ -312,6 +330,43 @@ async def create_team_group(team_id: str, current_user: User = Depends(get_curre
     await group.insert()
     return group
 
+# --- NEW: LEAVE & BLOCK GROUP ---
+@router.post("/groups/{group_id}/leave")
+async def leave_group(group_id: str, current_user: User = Depends(get_current_user)):
+    group = await ChatGroup.get(group_id)
+    if not group: raise HTTPException(404, "Group not found")
+    uid = str(current_user.id)
+    
+    if uid not in group.members: raise HTTPException(400, "Not a member")
+    
+    group.members.remove(uid)
+    if group.admin_id == uid:
+        if group.members: group.admin_id = group.members[0]
+        elif not group.is_team_group: await group.delete(); return {"status": "left_deleted"}
+    
+    await group.save()
+    return {"status": "left"}
+
+@router.post("/groups/{group_id}/block")
+async def block_group(group_id: str, current_user: User = Depends(get_current_user)):
+    group = await ChatGroup.get(group_id)
+    if not group: raise HTTPException(404, "Group not found")
+    uid = str(current_user.id)
+    
+    # 1. Leave
+    if uid in group.members:
+        group.members.remove(uid)
+        if group.admin_id == uid:
+            if group.members: group.admin_id = group.members[0]
+            elif not group.is_team_group: await group.delete()
+        await group.save()
+    
+    # 2. Block
+    exists = await Block.find_one(Block.blocker_id == uid, Block.blocked_id == group_id)
+    if not exists: await Block(blocker_id=uid, blocked_id=group_id).insert()
+    
+    return {"status": "blocked"}
+
 @router.get("/contacts")
 async def get_contacts(current_user: User = Depends(get_current_user)):
     uid = str(current_user.id)
@@ -327,15 +382,6 @@ async def get_contacts(current_user: User = Depends(get_current_user)):
         user = await User.get(pid)
         if user: contacts.append({"id": str(user.id), "username": user.username, "avatar_url": user.avatar_url or "https://github.com/shadcn.png"})
     return contacts
-
-@router.get("/unread-count")
-async def get_total_unread(current_user: User = Depends(get_current_user)):
-    uid = str(current_user.id)
-    dm_count = await Message.find({"recipient_id": uid, "is_read": {"$ne": True}}).count()
-    group_counts = await UnreadCount.find(UnreadCount.user_id == uid).to_list(None)
-    total_group = sum([g.msg_count for g in group_counts])
-    
-    return {"count": dm_count + total_group}
 
 @router.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):

@@ -17,6 +17,22 @@ class Skill(BaseModel):
     name: str
     level: str
 
+# --- NEW PROFILE SUB-MODELS ---
+class Link(BaseModel):
+    platform: str # e.g. "Twitter", "Portfolio", "Blog"
+    url: str
+
+class Achievement(BaseModel):
+    title: str
+    date: Optional[str] = None
+    description: Optional[str] = None
+
+class ConnectedAccounts(BaseModel):
+    linkedin: Optional[str] = None
+    codeforces: Optional[str] = None
+    leetcode: Optional[str] = None
+
+# --- VOTING MODELS ---
 class DeletionRequest(BaseModel):
     is_active: bool = False
     initiator_id: str
@@ -41,14 +57,23 @@ class User(Document):
     is_verified_student: bool = False
     auth_method: str = Field(default="github") 
     
+    # --- UPDATED PROFILE FIELDS ---
     skills: List[Skill] = []
     interests: List[str] = [] 
     about: Optional[str] = "I love building cool things!"
     availability: List[DayAvailability] = [] 
     is_looking_for_team: bool = Field(default=True)
     
+    # NEW FIELDS
+    age: Optional[str] = None
+    school: Optional[str] = None
+    social_links: List[Link] = []
+    professional_links: List[Link] = []
+    achievements: List[Achievement] = []
+    
+    connected_accounts: ConnectedAccounts = Field(default_factory=ConnectedAccounts)
+    
     accepted_chat_requests: List[str] = [] 
-
     embedding: List[float] = [] 
     
     class Settings: name = "users"
@@ -56,7 +81,7 @@ class User(Document):
 class UnreadCount(Document):
     user_id: str
     target_id: str 
-    msg_count: int = 0  # <--- RENAMED FROM count
+    msg_count: int = 0
     last_read_at: datetime = Field(default_factory=datetime.now)
     class Settings: name = "unread_counts"
 
