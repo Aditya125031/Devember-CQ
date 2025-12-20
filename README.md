@@ -18,7 +18,7 @@ Before running this project, ensure you have the following installed on your mac
 
 Node.js (v18+)
 
-Python (v3.9+)
+Python (v3.12.0)
 
 Git
 
@@ -75,7 +75,9 @@ GITHUB_CLIENT_ID=your_github_client_id
 GITHUB_CLIENT_SECRET=your_github_client_secret
 SECRET_KEY=any_random_secret_string
 GEMINI_API_KEY=your_gemini_api_key
-
+GOOGLE_CLIENT_ID=your_google_client_id
+GOOGLE_CLIENT_SECRET=your_google_client_secret
+FRONTEND_URL=http://localhost:3000 (or your production URL)
 
 Run the Server:
 uvicorn main:app --reload
@@ -94,6 +96,15 @@ npm install framer-motion lucide-react js-cookie axios
 npm install -D @types/js-cookie
 npm install --save-dev @types/js-cookie
 
+Create a file named .env.local inside collabquest-frontend/ and paste this:
+
+NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_FRONTEND_URL=http://localhost:3000
+
+# When using a Tunnel (Comment out the above and uncomment this)
+NEXT_PUBLIC_API_URL=https://your-backend-tunnel.ngrok-free.app
+NEXT_PUBLIC_WS_URL=wss://your-backend-tunnel.ngrok-free.app
+
 # Run the frontend
 npm run dev
 # App running at http://localhost:3000
@@ -105,7 +116,7 @@ Go to GitHub Developer Settings.
 
 Click New OAuth App.
 
-Set Homepage URL to http://localhost:3000.
+Set Homepage URL to http://localhost:3000 (or your production URL).
 
 Set Authorization Callback URL to http://localhost:8000/auth/callback.
 

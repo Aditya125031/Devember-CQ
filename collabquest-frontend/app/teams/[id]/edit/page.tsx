@@ -5,7 +5,7 @@ import Cookies from "js-cookie";
 import api from "@/lib/api";
 import { motion, AnimatePresence } from "framer-motion";
 import GlobalHeader from "@/components/GlobalHeader";
-import { ArrowLeft, Save, Sparkles, Loader2, X, Check, Plus, Trash2, Code2, AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
+import { ArrowLeft, Save, Sparkles, Loader2, X, Check, Plus, Trash2, Code2, AlertTriangle, CheckCircle2, XCircle, Crown } from "lucide-react";
 import Link from "next/link";
 
 const PRESET_SKILLS = ["React", "Python", "Node.js", "TypeScript", "Next.js", "Tailwind", "MongoDB", "Firebase", "Flutter", "Java", "C++", "Rust", "Go", "Figma", "UI/UX", "AI/ML", "Docker", "AWS", "Solidity"];
@@ -17,7 +17,7 @@ export default function EditTeamPage() {
     const router = useRouter();
     const teamId = params.id as string;
     const [loading, setLoading] = useState(true);
-    const [team, setTeam] = useState<any>(null); // Store full team object
+    const [team, setTeam] = useState<any>(null);
 
     // Form State
     const [name, setName] = useState("");
@@ -29,12 +29,10 @@ export default function EditTeamPage() {
     const [techStack, setTechStack] = useState<string[]>([]);
     const [stackDropdown, setStackDropdown] = useState("");
     const [isRecruiting, setIsRecruiting] = useState(true);
+    const [newLeaderId, setNewLeaderId] = useState(""); // <--- Transfer Leader
 
-    // AI State
     const [isSuggesting, setIsSuggesting] = useState(false);
     const [suggestions, setSuggestions] = useState<Suggestions | null>(null);
-
-    // Action States
     const [deletionProcessing, setDeletionProcessing] = useState(false);
     const [completionProcessing, setCompletionProcessing] = useState(false);
 
@@ -59,7 +57,6 @@ export default function EditTeamPage() {
     }, [teamId]);
 
     const handleSave = async () => {
-        const token = Cookies.get("token");
         try {
             await api.put(`/teams/${teamId}`, {
                 name,
@@ -77,12 +74,11 @@ export default function EditTeamPage() {
         } catch (e) { alert("Failed to update"); }
     };
 
-    // --- BUTTON ACTIONS ---
+    // --- ACTIONS ---
     const toggleRecruiting = () => setIsRecruiting(!isRecruiting);
 
     const handleInitiateDelete = async () => {
         if (!confirm("Start a vote to DELETE this project?")) return;
-        const token = Cookies.get("token");
         try {
             setDeletionProcessing(true);
             await api.post(`/teams/${teamId}/delete/initiate`, {});
@@ -93,7 +89,6 @@ export default function EditTeamPage() {
 
     const handleInitiateComplete = async () => {
         if (!confirm("Start a vote to mark project as COMPLETED?")) return;
-        const token = Cookies.get("token");
         try {
             setCompletionProcessing(true);
             await api.post(`/teams/${teamId}/complete/initiate`, {});
@@ -102,36 +97,33 @@ export default function EditTeamPage() {
         } catch (e) { alert("Failed"); } finally { setCompletionProcessing(false); }
     };
 
-    // --- HELPER FUNCTIONS ---
+    // --- NEW: TRANSFER LEADERSHIP ---
+    const handleTransferLeadership = async () => {
+        if (!newLeaderId) return alert("Select a member.");
+        if (!confirm("Are you sure? You will lose admin privileges.")) return;
+        try {
+            await api.post(`/teams/${teamId}/transfer-leadership`, { new_leader_id: newLeaderId });
+            alert("Leadership Transferred!");
+            router.push(`/teams/${teamId}`);
+        } catch (e) { alert("Failed to transfer."); }
+    };
+
+    // ... (Helpers/AI Logic - Unchanged) ...
     const addActiveSkill = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && activeSkillInput.trim()) { if (!activeSkills.includes(activeSkillInput.trim())) setActiveSkills([...activeSkills, activeSkillInput.trim()]); setActiveSkillInput(""); } };
     const removeActiveSkill = (s: string) => setActiveSkills(activeSkills.filter(x => x !== s));
-
     const addStackSkill = (s: string) => { if (!techStack.includes(s)) setTechStack([...techStack, s]); setStackDropdown(""); };
     const removeStackSkill = (s: string) => setTechStack(techStack.filter(x => x !== s));
-
-    // --- AI LOGIC ---
-    const askAi = async () => {
-        setIsSuggesting(true); setSuggestions(null);
-        const token = Cookies.get("token");
-        try {
-            const res = await api.post("/teams/suggest-stack", { description, current_skills: techStack });
-            if (res.data && (res.data.add.length > 0 || res.data.remove.length > 0)) setSuggestions(res.data); else alert("No AI suggestions found.");
-        } catch (e) { alert("AI Failed"); } finally { setIsSuggesting(false); }
-    };
+    const askAi = async () => { setIsSuggesting(true); setSuggestions(null); try { const res = await api.post("/teams/suggest-stack", { description, current_skills: techStack }); if (res.data && (res.data.add.length > 0 || res.data.remove.length > 0)) setSuggestions(res.data); else alert("No AI suggestions found."); } catch (e) { alert("AI Failed"); } finally { setIsSuggesting(false); } };
     const acceptSuggestion = (type: 'add' | 'remove', s: string) => { if (type === 'add') addStackSkill(s); else removeStackSkill(s); setSuggestions(prev => prev ? ({ ...prev, [type]: prev[type].filter(x => x !== s) }) : null); };
 
     if (loading) return <div className="h-screen bg-black text-white flex items-center justify-center">Loading...</div>;
-
     const isFull = team && team.members.length >= targetMembers;
 
     return (
         <div className="min-h-screen bg-gray-950 text-white">
             <GlobalHeader />
             <div className="max-w-3xl mx-auto p-8">
-                <div className="flex items-center gap-4 mb-8">
-                    <Link href={`/teams/${teamId}`} className="p-2 bg-gray-800 rounded-full hover:bg-gray-700"><ArrowLeft /></Link>
-                    <h1 className="text-3xl font-bold">Edit Team Settings</h1>
-                </div>
+                <div className="flex items-center gap-4 mb-8"><Link href={`/teams/${teamId}`} className="p-2 bg-gray-800 rounded-full hover:bg-gray-700"><ArrowLeft /></Link><h1 className="text-3xl font-bold">Edit Team Settings</h1></div>
 
                 <div className="space-y-8">
                     {/* General Info */}
@@ -139,10 +131,7 @@ export default function EditTeamPage() {
                         <h3 className="text-xl font-bold text-gray-300 border-b border-gray-800 pb-2">General Info</h3>
                         <div><label className="block text-sm text-gray-500 mb-1">Team Name</label><input className="w-full bg-gray-950 border border-gray-700 rounded p-3" value={name} onChange={e => setName(e.target.value)} /></div>
                         <div><label className="block text-sm text-gray-500 mb-1">Description</label><textarea className="w-full bg-gray-950 border border-gray-700 rounded p-3 h-32" value={description} onChange={e => setDescription(e.target.value)} /></div>
-                        <div className="grid grid-cols-2 gap-4">
-                            <div><label className="block text-sm text-gray-500 mb-1">Target Members</label><input type="number" className="w-full bg-gray-950 border border-gray-700 rounded p-3" value={targetMembers} onChange={e => setTargetMembers(parseInt(e.target.value))} /></div>
-                            <div><label className="block text-sm text-gray-500 mb-1">Target Date</label><input type="date" className="w-full bg-gray-950 border border-gray-700 rounded p-3" style={{ colorScheme: "dark" }} value={targetDate} onChange={e => setTargetDate(e.target.value)} /></div>
-                        </div>
+                        <div className="grid grid-cols-2 gap-4"><div><label className="block text-sm text-gray-500 mb-1">Target Members</label><input type="number" className="w-full bg-gray-950 border border-gray-700 rounded p-3" value={targetMembers} onChange={e => setTargetMembers(parseInt(e.target.value))} /></div><div><label className="block text-sm text-gray-500 mb-1">Target Date</label><input type="date" className="w-full bg-gray-950 border border-gray-700 rounded p-3" style={{ colorScheme: "dark" }} value={targetDate} onChange={e => setTargetDate(e.target.value)} /></div></div>
                     </div>
 
                     {/* Tech Stack */}
@@ -155,7 +144,7 @@ export default function EditTeamPage() {
                     {/* Active Roles */}
                     <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl space-y-4">
                         <h3 className="text-xl font-bold text-gray-300 border-b border-gray-800 pb-2">Active Open Roles</h3>
-                        <p className="text-sm text-gray-500">Specific roles you are actively recruiting for right now (e.g. "Backend Lead", "UI Designer"). Used for matching.</p>
+                        <p className="text-sm text-gray-500">Specific roles you are actively recruiting for right now.</p>
                         <div className="flex flex-wrap gap-2">{activeSkills.map(s => (<span key={s} className="bg-blue-900/20 text-blue-300 border border-blue-500/30 px-3 py-1 rounded-full text-sm flex items-center gap-2">{s} <button onClick={() => removeActiveSkill(s)}><X className="w-3 h-3 hover:text-white" /></button></span>))}</div>
                         <div className="flex gap-2"><input className="flex-1 bg-gray-950 border border-gray-700 rounded p-2 text-sm" placeholder="Add Role (Press Enter)..." value={activeSkillInput} onChange={e => setActiveSkillInput(e.target.value)} onKeyDown={addActiveSkill} /><button onClick={() => { if (activeSkillInput) addActiveSkill({ key: 'Enter' } as any); }} className="bg-gray-800 px-4 rounded hover:bg-gray-700"><Plus className="w-5 h-5" /></button></div>
                     </div>
@@ -164,44 +153,29 @@ export default function EditTeamPage() {
                     <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl space-y-4">
                         <h3 className="text-xl font-bold text-gray-300 border-b border-gray-800 pb-2">Management</h3>
 
-                        {/* Recruitment Toggle */}
                         <div className="flex items-center justify-between">
-                            <div>
-                                <h4 className="font-bold">Recruitment Status</h4>
-                                <p className="text-xs text-gray-500">{isFull ? "Target member count reached." : "Toggle visibility in search."}</p>
-                            </div>
-                            <button
-                                onClick={!isFull ? toggleRecruiting : undefined}
-                                disabled={isFull}
-                                className={`px-4 py-2 rounded-full font-bold flex items-center gap-2 text-sm transition-all border ${isFull ? 'bg-gray-800 border-gray-700 text-gray-500 cursor-not-allowed' :
-                                        isRecruiting ? 'bg-green-900/20 border-green-500/50 text-green-400 hover:bg-green-900/30' :
-                                            'bg-red-900/20 border-red-500/50 text-red-400 hover:bg-red-900/30'
-                                    }`}
-                            >
-                                {isFull ? <XCircle className="w-4 h-4" /> : (isRecruiting ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />)}
-                                {isFull ? "Team Full" : (isRecruiting ? "Recruiting: ON" : "Recruiting: OFF")}
-                            </button>
+                            <div><h4 className="font-bold">Recruitment Status</h4><p className="text-xs text-gray-500">{isFull ? "Target member count reached." : "Toggle visibility in search."}</p></div>
+                            <button onClick={!isFull ? toggleRecruiting : undefined} disabled={isFull} className={`px-4 py-2 rounded-full font-bold flex items-center gap-2 text-sm transition-all border ${isFull ? 'bg-gray-800 border-gray-700 text-gray-500 cursor-not-allowed' : isRecruiting ? 'bg-green-900/20 border-green-500/50 text-green-400 hover:bg-green-900/30' : 'bg-red-900/20 border-red-500/50 text-red-400 hover:bg-red-900/30'}`}>{isFull ? <XCircle className="w-4 h-4" /> : (isRecruiting ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />)}{isFull ? "Team Full" : (isRecruiting ? "Recruiting: ON" : "Recruiting: OFF")}</button>
                         </div>
 
-                        {/* Complete Project (Only if Active) */}
-                        {team && team.status === 'active' && (
-                            <div className="flex items-center justify-between border-t border-gray-800 pt-4">
-                                <div><h4 className="font-bold text-green-400">Complete Project</h4><p className="text-xs text-gray-500">Finish development and rate teammates.</p></div>
-                                <button onClick={handleInitiateComplete} disabled={completionProcessing} className="px-4 py-2 bg-green-900/20 hover:bg-green-900/40 text-green-400 border border-green-500/50 rounded-lg text-sm font-bold flex gap-2"><Check className="w-4 h-4" /> Complete</button>
+                        {/* NEW: TRANSFER LEADERSHIP */}
+                        <div className="flex flex-col gap-2 border-t border-gray-800 pt-4">
+                            <div><h4 className="font-bold text-yellow-400">Transfer Leadership</h4><p className="text-xs text-gray-500">Select a new leader. You will lose admin rights.</p></div>
+                            <div className="flex gap-2">
+                                <select className="flex-1 bg-gray-950 border border-gray-700 rounded p-2 text-sm" value={newLeaderId} onChange={e => setNewLeaderId(e.target.value)}>
+                                    <option value="">Select Member</option>
+                                    {team.members.filter((m: any) => m.id !== team.leader_id).map((m: any) => <option key={m.id} value={m.id}>{m.username}</option>)}
+                                </select>
+                                <button onClick={handleTransferLeadership} className="bg-yellow-600 hover:bg-yellow-500 text-white px-4 py-2 rounded text-sm font-bold flex items-center gap-2"><Crown className="w-4 h-4" /> Transfer</button>
                             </div>
-                        )}
-
-                        {/* Delete Project */}
-                        <div className="flex items-center justify-between border-t border-gray-800 pt-4">
-                            <div><h4 className="font-bold text-red-400">Danger Zone</h4><p className="text-xs text-gray-500">Permanently delete this project.</p></div>
-                            <button onClick={handleInitiateDelete} disabled={deletionProcessing} className="px-4 py-2 bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-500/50 rounded-lg text-sm font-bold flex gap-2"><Trash2 className="w-4 h-4" /> Delete Project</button>
                         </div>
+
+                        {/* Complete / Delete */}
+                        {team && team.status === 'active' && (<div className="flex items-center justify-between border-t border-gray-800 pt-4"><div><h4 className="font-bold text-green-400">Complete Project</h4><p className="text-xs text-gray-500">Finish development and rate teammates.</p></div><button onClick={handleInitiateComplete} disabled={completionProcessing} className="px-4 py-2 bg-green-900/20 hover:bg-green-900/40 text-green-400 border border-green-500/50 rounded-lg text-sm font-bold flex gap-2"><Check className="w-4 h-4" /> Complete</button></div>)}
+                        <div className="flex items-center justify-between border-t border-gray-800 pt-4"><div><h4 className="font-bold text-red-400">Danger Zone</h4><p className="text-xs text-gray-500">Permanently delete this project.</p></div><button onClick={handleInitiateDelete} disabled={deletionProcessing} className="px-4 py-2 bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-500/50 rounded-lg text-sm font-bold flex gap-2"><Trash2 className="w-4 h-4" /> Delete Project</button></div>
                     </div>
 
-                    <div className="flex gap-4 pt-4 pb-12">
-                        <button onClick={handleSave} className="flex-1 bg-green-600 hover:bg-green-500 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 shadow-lg"><Save className="w-5 h-5" /> Save Changes</button>
-                        <Link href={`/teams/${teamId}`} className="flex-1"><button className="w-full bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold py-3 rounded-xl">Cancel</button></Link>
-                    </div>
+                    <div className="flex gap-4 pt-4 pb-12"><button onClick={handleSave} className="flex-1 bg-green-600 hover:bg-green-500 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 shadow-lg"><Save className="w-5 h-5" /> Save Changes</button><Link href={`/teams/${teamId}`} className="flex-1"><button className="w-full bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold py-3 rounded-xl">Cancel</button></Link></div>
                 </div>
             </div>
         </div>

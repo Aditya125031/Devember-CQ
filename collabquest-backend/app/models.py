@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 import uuid 
 
+# --- HELPER MODELS ---
 class TimeRange(BaseModel):
     start: str 
     end: str 
@@ -17,9 +18,8 @@ class Skill(BaseModel):
     name: str
     level: str
 
-# --- NEW PROFILE SUB-MODELS ---
 class Link(BaseModel):
-    platform: str # e.g. "Twitter", "Portfolio", "Blog"
+    platform: str 
     url: str
 
 class Achievement(BaseModel):
@@ -32,7 +32,16 @@ class ConnectedAccounts(BaseModel):
     codeforces: Optional[str] = None
     leetcode: Optional[str] = None
 
-# --- VOTING MODELS ---
+class Rating(BaseModel):
+    project_id: str
+    project_name: str
+    rater_id: str
+    rater_name: str
+    score: int
+    explanation: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.now)
+
+# --- VOTING & REQUEST MODELS ---
 class DeletionRequest(BaseModel):
     is_active: bool = False
     initiator_id: str
@@ -44,6 +53,24 @@ class CompletionRequest(BaseModel):
     initiator_id: str
     votes: Dict[str, str] = {}
     created_at: datetime = Field(default_factory=datetime.now)
+
+class MemberRequest(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    target_user_id: str 
+    type: str 
+    explanation: str
+    is_active: bool = True
+    initiator_id: str
+    votes: Dict[str, str] = {} 
+    created_at: datetime = Field(default_factory=datetime.now)
+
+class ExtensionRequest(BaseModel):
+    is_active: bool = True
+    requested_deadline: datetime
+    initiator_id: str
+    votes: Dict[str, str] = {} 
+
+# --- MAIN DOCUMENTS ---
 
 class User(Document):
     github_id: Optional[str] = Field(None)
@@ -57,14 +84,12 @@ class User(Document):
     is_verified_student: bool = False
     auth_method: str = Field(default="github") 
     
-    # --- UPDATED PROFILE FIELDS ---
     skills: List[Skill] = []
     interests: List[str] = [] 
     about: Optional[str] = "I love building cool things!"
     availability: List[DayAvailability] = [] 
     is_looking_for_team: bool = Field(default=True)
     
-    # NEW FIELDS
     age: Optional[str] = None
     school: Optional[str] = None
     social_links: List[Link] = []
@@ -72,7 +97,8 @@ class User(Document):
     achievements: List[Achievement] = []
     
     connected_accounts: ConnectedAccounts = Field(default_factory=ConnectedAccounts)
-    
+    ratings_received: List[Rating] = []
+
     accepted_chat_requests: List[str] = [] 
     embedding: List[float] = [] 
     
@@ -92,9 +118,15 @@ class Task(BaseModel):
     deadline: datetime
     status: str = "pending" 
     completed_at: Optional[datetime] = None 
+    
     warning_sent: bool = False 
+    
     verification_votes: List[str] = [] 
     rework_votes: List[str] = [] 
+    
+    extension_request: Optional[ExtensionRequest] = None
+    was_extended: bool = False 
+    
     created_at: datetime = Field(default_factory=datetime.now)
 
 class Team(Document):
@@ -114,6 +146,8 @@ class Team(Document):
     
     deletion_request: Optional[DeletionRequest] = None
     completion_request: Optional[CompletionRequest] = None 
+    member_requests: List[MemberRequest] = [] 
+    
     tasks: List[Task] = []
     embedding: List[float] = [] 
     

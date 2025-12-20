@@ -221,11 +221,17 @@ async def seed():
         async def seed_q(qs, skill):
             count = 0
             for q in qs:
+                # Jumble up options
+                options = q[1][:]
+                correct_val = options[q[2]]
+                random.shuffle(options)
+                new_correct_idx = options.index(correct_val)
+
                 await Question(
                     skill=skill,
                     text=q[0],
-                    options=q[1],
-                    correct_index=q[2],
+                    options=options,
+                    correct_index=new_correct_idx,
                     difficulty=q[3]
                 ).insert()
                 count += 1
