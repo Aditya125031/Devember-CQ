@@ -1,9 +1,11 @@
-fastapi>=0.100.0 
-uvicorn[standard]>=0.23.0 
-motor>=3.3.0 beanie>=1.21.0 
-pydantic>=2.0.0 
-python-dotenv>=1.0.0 
-httpx>=0.24.0 
-python-jose[cryptography]>=3.3.0 
-certifi>=2023.7.22 
-email-validator>=2.0.0
+fastapi
+uvicorn[standard]
+motor
+beanie
+pydantic
+httpx       # To talk to GitHub API
+python-jose # To create JWT tokens for your app
+python-dotenv
+bcrypt     # For password hashing
+google-auth-httplib2 # For Google OAuth
+google-generativeai # For AI roadmap features
