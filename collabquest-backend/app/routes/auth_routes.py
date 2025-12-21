@@ -6,7 +6,7 @@ from app.auth.utils import (
     create_access_token, GITHUB_CLIENT_ID, hash_password, verify_password,
     get_google_token, get_google_user, GOOGLE_CLIENT_ID
 )
-from app.models import User
+from app.models import User, TrustBreakdown
 from app.database import init_db
 
 router = APIRouter()
@@ -40,7 +40,7 @@ async def github_callback(code: str):
     1. GitHub sends back a 'code'
     2. We exchange it for a Token
     3. We fetch their Profile
-    4. We calculate Trust Score & Save to DB
+    4. We calculate Trust Score & Breakdown & Save to DB
     5. We give them a JWT to log in
     """
     token = await get_github_token(code)
@@ -54,14 +54,16 @@ async def github_callback(code: str):
     
     if not user:
         # NEW USER: Calculate Score & Create
-        trust_score = calculate_trust_score(github_user)
+        score, breakdown_dict = calculate_trust_score(github_user)
+        trust_breakdown = TrustBreakdown(**breakdown_dict)
         
         user = User(
             github_id=str(github_user["id"]),
             username=github_user["login"],
             email=github_user.get("email") or "no-email@github.com",
             avatar_url=github_user["avatar_url"],
-            trust_score=trust_score,
+            trust_score=score,
+            trust_score_breakdown=trust_breakdown,
             is_verified_student=False # They need to verify email later
         )
         await user.insert()
@@ -69,8 +71,6 @@ async def github_callback(code: str):
     # Generate JWT for the Frontend
     jwt_token = create_access_token({"sub": str(user.id)})
     
-    # Redirect back to Frontend with the token
-    # In production, use HttpOnly cookies. For hackathon, URL param is fine.
     return RedirectResponse(f"http://localhost:3000/dashboard?token={jwt_token}")
 
 @router.get("/dev/{username}")
@@ -172,10 +172,6 @@ async def google_login():
 async def google_callback(code: str):
     """
     Google OAuth callback handler
-    1. Exchange code for access token
-    2. Fetch user profile
-    3. Create or find user in DB
-    4. Generate JWT and redirect to frontend
     """
     token = await get_google_token(code, "http://localhost:8000/auth/google/callback")
     if not token:

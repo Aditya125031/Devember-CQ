@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Optional
 from pydantic import BaseModel
-from app.models import User, Skill, DayAvailability, TimeRange, Block, Link, Achievement, ConnectedAccounts
+from app.models import User, Skill, DayAvailability, TimeRange, Block, Link, Achievement, ConnectedAccounts, Education
 from app.auth.dependencies import get_current_user
 from app.services.vector_store import generate_embedding
+from app.auth.utils import fetch_codeforces_stats, fetch_leetcode_stats
 from bson import ObjectId
 
 router = APIRouter()
@@ -17,7 +18,7 @@ class ProfileUpdate(BaseModel):
     
     # New Fields
     age: Optional[str] = None
-    school: Optional[str] = None
+    education: List[Education] = []
     social_links: List[Link] = []
     professional_links: List[Link] = []
     achievements: List[Achievement] = []
@@ -27,6 +28,50 @@ class ConnectRequest(BaseModel):
 
 class SkillsUpdate(BaseModel):
     skills: List[str]
+
+async def update_trust_score(user: User):
+    """Recalculates trust score based on verified connected accounts"""
+    breakdown = user.trust_score_breakdown
+    
+    # Reset external scores in details to prevent duplicates (keeping GitHub/Base)
+    breakdown.details = [d for d in breakdown.details if not any(p in d for p in ["Codeforces", "LeetCode", "LinkedIn"])]
+    
+    # 1. Codeforces
+    if user.connected_accounts.codeforces:
+        stats = await fetch_codeforces_stats(user.connected_accounts.codeforces)
+        if stats and "rating" in stats:
+            rating = stats["rating"]
+            points = 0.0
+            if rating >= 1200: points = 1.0
+            if rating >= 1500: points = 1.5
+            if rating >= 1900: points = 2.0
+            breakdown.codeforces = points
+            breakdown.details.append(f"Codeforces: Rating {rating} (+{points})")
+            
+    # 2. LeetCode
+    if user.connected_accounts.leetcode:
+        stats = await fetch_leetcode_stats(user.connected_accounts.leetcode)
+        if stats:
+            total_solved = 0
+            for item in stats["submitStats"]["acSubmissionNum"]:
+                if item["difficulty"] == "All":
+                    total_solved = item["count"]
+            points = 0.0
+            if total_solved >= 50: points = 0.5
+            if total_solved >= 100: points = 1.0
+            if total_solved >= 300: points = 1.5
+            breakdown.leetcode = points
+            breakdown.details.append(f"LeetCode: {total_solved} Solved (+{points})")
+
+    # 3. LinkedIn (Placeholder verification)
+    if user.connected_accounts.linkedin:
+        breakdown.linkedin = 0.5
+        breakdown.details.append("LinkedIn: Connected (+0.5)")
+        
+    total = breakdown.base + breakdown.github + breakdown.codeforces + breakdown.leetcode + breakdown.linkedin
+    user.trust_score = round(min(10.0, total), 1)
+    user.trust_score_breakdown = breakdown
+    await user.save()
 
 @router.get("/me", response_model=User)
 async def read_users_me(current_user: User = Depends(get_current_user)):
@@ -43,14 +88,15 @@ async def update_profile(data: ProfileUpdate, current_user: User = Depends(get_c
     
     # Save New Fields
     current_user.age = data.age
-    current_user.school = data.school
+    current_user.education = data.education
     current_user.social_links = data.social_links
     current_user.professional_links = data.professional_links
     current_user.achievements = data.achievements
     
     # Embedding generation
     achievements_text = " ".join([a.title for a in data.achievements])
-    profile_text = f"{' '.join(data.skills)} {' '.join(data.interests)} {data.about} {data.school or ''} {achievements_text}"
+    edu_text = " ".join([f"{e.course} at {e.institute}" for e in data.education if e.is_visible])
+    profile_text = f"{' '.join(data.skills)} {' '.join(data.interests)} {data.about} {edu_text} {achievements_text}"
     current_user.embedding = generate_embedding(profile_text)
     
     await current_user.save()
@@ -59,32 +105,42 @@ async def update_profile(data: ProfileUpdate, current_user: User = Depends(get_c
 @router.post("/connect/{platform}")
 async def connect_platform(platform: str, req: ConnectRequest, current_user: User = Depends(get_current_user)):
     """
-    Connects external platforms and boosts trust score.
-    Platforms: 'linkedin', 'codeforces', 'leetcode'
+    Connects external platforms, verifies them by fetching data, and boosts trust score.
     """
     platform = platform.lower()
-    boost_amount = 0.5 
     
     if platform == "linkedin":
-        if not current_user.connected_accounts.linkedin:
-            current_user.trust_score = min(10.0, current_user.trust_score + boost_amount)
+        # Basic URL validation as we can't easily fetch private LinkedIn data
+        if "linkedin.com/in/" not in req.handle_or_url:
+            raise HTTPException(400, "Invalid LinkedIn Profile URL")
         current_user.connected_accounts.linkedin = req.handle_or_url
+        await update_trust_score(current_user)
         
     elif platform == "codeforces":
-        if not current_user.connected_accounts.codeforces:
-            current_user.trust_score = min(10.0, current_user.trust_score + boost_amount)
+        # Verify handle exists
+        stats = await fetch_codeforces_stats(req.handle_or_url)
+        if not stats:
+            raise HTTPException(404, "Codeforces handle not found")
         current_user.connected_accounts.codeforces = req.handle_or_url
+        await update_trust_score(current_user)
         
     elif platform == "leetcode":
-        if not current_user.connected_accounts.leetcode:
-            current_user.trust_score = min(10.0, current_user.trust_score + boost_amount)
+        # Verify user exists
+        stats = await fetch_leetcode_stats(req.handle_or_url)
+        if not stats:
+            raise HTTPException(404, "LeetCode user not found")
         current_user.connected_accounts.leetcode = req.handle_or_url
+        await update_trust_score(current_user)
     
     else:
         raise HTTPException(400, "Invalid platform")
         
-    await current_user.save()
-    return {"status": "connected", "trust_score": current_user.trust_score, "account": req.handle_or_url}
+    return {
+        "status": "connected", 
+        "trust_score": current_user.trust_score, 
+        "breakdown": current_user.trust_score_breakdown,
+        "account": req.handle_or_url
+    }
 
 @router.put("/skills", response_model=User)
 async def update_skills_legacy(data: SkillsUpdate, current_user: User = Depends(get_current_user)):

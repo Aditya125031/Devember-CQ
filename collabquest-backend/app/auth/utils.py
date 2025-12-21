@@ -36,27 +36,89 @@ async def get_github_user(token: str):
         response = await client.get("https://api.github.com/user", headers=headers)
         return response.json()
 
-def calculate_trust_score(github_data: dict) -> float:
+def calculate_trust_score(github_data: dict) -> tuple[float, dict]:
     """
     Hackathon Magic: Calculate 'Trust' based on GitHub stats.
-    Formula: Base 5 + (Repos * 0.1) + (Followers * 0.2) + (Account Age Bonus)
-    Max Score: 10.0
+    Returns: (total_score, breakdown_dict)
     """
     base_score = 5.0
     
     # Extract stats
     public_repos = github_data.get("public_repos", 0)
     followers = github_data.get("followers", 0)
-    created_at = datetime.strptime(github_data.get("created_at"), "%Y-%m-%dT%H:%M:%SZ")
-    account_age_years = (datetime.now() - created_at).days / 365
+    created_at_str = github_data.get("created_at")
+    
+    account_age_years = 0
+    if created_at_str:
+        try:
+            created_at = datetime.strptime(created_at_str, "%Y-%m-%dT%H:%M:%SZ")
+            account_age_years = (datetime.now() - created_at).days / 365
+        except:
+            pass
     
     # Calculate Bonus
     repo_points = min(2.0, public_repos * 0.1) # Max 2 points for repos
     follower_points = min(2.0, followers * 0.2) # Max 2 points for followers
     age_points = min(1.0, account_age_years * 0.5) # Max 1 point for age
     
-    total = base_score + repo_points + follower_points + age_points
-    return round(min(10.0, total), 1)
+    github_total = round(repo_points + follower_points + age_points, 1)
+    
+    breakdown = {
+        "base": base_score,
+        "github": github_total,
+        "linkedin": 0.0,
+        "codeforces": 0.0,
+        "leetcode": 0.0,
+        "details": [
+            f"GitHub: {public_repos} Repos (+{round(repo_points, 1)})",
+            f"GitHub: {followers} Followers (+{round(follower_points, 1)})",
+            f"GitHub: {round(account_age_years, 1)} Years Old (+{round(age_points, 1)})"
+        ]
+    }
+    
+    total = base_score + github_total
+    return round(min(10.0, total), 1), breakdown
+
+async def fetch_codeforces_stats(handle: str):
+    """Fetches user stats from Codeforces API to verify existence and score."""
+    url = f"https://codeforces.com/api/user.info?handles={handle}"
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(url, timeout=10.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data["status"] == "OK":
+                    return data["result"][0]
+        except Exception:
+            pass
+    return None
+
+async def fetch_leetcode_stats(username: str):
+    """Fetches user stats from LeetCode GraphQL API."""
+    url = "https://leetcode.com/graphql"
+    query = """
+    query userPublicProfile($username: String!) {
+      matchedUser(username: $username) {
+        username
+        submitStats: submitStatsGlobal {
+          acSubmissionNum {
+            difficulty
+            count
+          }
+        }
+      }
+    }
+    """
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(url, json={"query": query, "variables": {"username": username}}, timeout=10.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                if "data" in data and data["data"] and data["data"]["matchedUser"]:
+                    return data["data"]["matchedUser"]
+        except Exception:
+            pass
+    return None
 
 def create_access_token(data: dict):
     """Create a JWT token for our frontend to use"""
@@ -67,14 +129,12 @@ def create_access_token(data: dict):
 
 def hash_password(password: str) -> str:
     """Hash a password using bcrypt"""
-    # Truncate password to 72 bytes (bcrypt limit) and hash
     password_bytes = password[:72].encode('utf-8')
     salt = bcrypt.gensalt(rounds=12)
     return bcrypt.hashpw(password_bytes, salt).decode('utf-8')
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash"""
-    # Truncate password to 72 bytes (bcrypt limit) and verify
     password_bytes = plain_password[:72].encode('utf-8')
     hashed_bytes = hashed_password.encode('utf-8')
     return bcrypt.checkpw(password_bytes, hashed_bytes)

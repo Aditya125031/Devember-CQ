@@ -41,6 +41,22 @@ class Rating(BaseModel):
     explanation: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.now)
 
+# --- NEW MODELS: TRUST & EDUCATION ---
+class TrustBreakdown(BaseModel):
+    base: float = 5.0
+    github: float = 0.0
+    linkedin: float = 0.0
+    codeforces: float = 0.0
+    leetcode: float = 0.0
+    details: List[str] = []
+
+class Education(BaseModel):
+    institute: str
+    course: str
+    year_of_study: Optional[str] = None # Optional: Don't ask if completed
+    is_completed: bool = False
+    is_visible: bool = True # User option to showcase in profile
+
 # --- VOTING & REQUEST MODELS ---
 class DeletionRequest(BaseModel):
     is_active: bool = False
@@ -79,7 +95,11 @@ class User(Document):
     email: str
     password_hash: Optional[str] = None
     avatar_url: Optional[str] = None
+    
+    # Trust Score
     trust_score: float = Field(default=5.0)
+    trust_score_breakdown: TrustBreakdown = Field(default_factory=TrustBreakdown) # Detailed Analysis
+    
     rating_count: int = Field(default=1) 
     is_verified_student: bool = False
     auth_method: str = Field(default="github") 
@@ -91,7 +111,11 @@ class User(Document):
     is_looking_for_team: bool = Field(default=True)
     
     age: Optional[str] = None
-    school: Optional[str] = None
+    
+    # Academic Qualifications
+    education: List[Education] = [] 
+    school: Optional[str] = None # Deprecated, kept for compatibility
+    
     social_links: List[Link] = []
     professional_links: List[Link] = []
     achievements: List[Achievement] = []
