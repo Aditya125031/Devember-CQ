@@ -29,6 +29,16 @@ class ConnectRequest(BaseModel):
 class SkillsUpdate(BaseModel):
     skills: List[str]
 
+# Add a model to handle visibility updates
+class VisibilityUpdate(BaseModel):
+    settings: VisibilitySettings
+
+@router.put("/visibility", response_model=User)
+async def update_visibility(data: VisibilityUpdate, current_user: User = Depends(get_current_user)):
+    current_user.visibility_settings = data.settings
+    await current_user.save()
+    return current_user
+
 async def update_trust_score(user: User):
     """Recalculates trust score based on verified connected accounts"""
     breakdown = user.trust_score_breakdown
@@ -104,42 +114,69 @@ async def update_profile(data: ProfileUpdate, current_user: User = Depends(get_c
 
 @router.post("/connect/{platform}")
 async def connect_platform(platform: str, req: ConnectRequest, current_user: User = Depends(get_current_user)):
-    """
-    Connects external platforms, verifies them by fetching data, and boosts trust score.
-    """
     platform = platform.lower()
-    
+    stats_data = {}
+
+    # 1. LINKEDIN (Verification is just URL check for now)
     if platform == "linkedin":
-        # Basic URL validation as we can't easily fetch private LinkedIn data
         if "linkedin.com/in/" not in req.handle_or_url:
             raise HTTPException(400, "Invalid LinkedIn Profile URL")
         current_user.connected_accounts.linkedin = req.handle_or_url
-        await update_trust_score(current_user)
+        stats_data = {"url": req.handle_or_url, "verified": True}
         
+    # 2. CODEFORCES (Verification is fetching the API)
     elif platform == "codeforces":
-        # Verify handle exists
         stats = await fetch_codeforces_stats(req.handle_or_url)
         if not stats:
-            raise HTTPException(404, "Codeforces handle not found")
-        current_user.connected_accounts.codeforces = req.handle_or_url
-        await update_trust_score(current_user)
+            raise HTTPException(404, "Codeforces handle not found") # <--- THIS IS THE VERIFICATION
         
+        # Save specific stats we want to show
+        stats_data = {
+            "handle": req.handle_or_url,
+            "rating": stats.get("rating", "Unrated"),
+            "rank": stats.get("rank", "Newbie"),
+            "maxRating": stats.get("maxRating", 0)
+        }
+        current_user.connected_accounts.codeforces = req.handle_or_url
+        
+    # 3. LEETCODE (Verification is fetching the API)
     elif platform == "leetcode":
-        # Verify user exists
         stats = await fetch_leetcode_stats(req.handle_or_url)
         if not stats:
-            raise HTTPException(404, "LeetCode user not found")
+            raise HTTPException(404, "LeetCode user not found") # <--- THIS IS THE VERIFICATION
+            
+        # Extract total solved
+        total_solved = 0
+        ac_submissions = stats.get("submitStats", {}).get("acSubmissionNum", [])
+        for item in ac_submissions:
+            if item["difficulty"] == "All":
+                total_solved = item["count"]
+                
+        stats_data = {
+            "username": req.handle_or_url,
+            "total_solved": total_solved,
+            # Note: Daily streak is hard to get via public API, usually requires authentication
+        }
         current_user.connected_accounts.leetcode = req.handle_or_url
-        await update_trust_score(current_user)
     
     else:
         raise HTTPException(400, "Invalid platform")
+
+    # SAVE THE STATS TO THE DATABASE
+    if not current_user.platform_stats:
+        current_user.platform_stats = {}
+    
+    current_user.platform_stats[platform] = stats_data
+    
+    # Update Trust Score (Existing Logic)
+    await update_trust_score(current_user)
+    
+    await current_user.save()
         
     return {
         "status": "connected", 
         "trust_score": current_user.trust_score, 
-        "breakdown": current_user.trust_score_breakdown,
-        "account": req.handle_or_url
+        "stats": stats_data
     }
 
 @router.put("/skills", response_model=User)

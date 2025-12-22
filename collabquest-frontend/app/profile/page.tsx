@@ -64,6 +64,11 @@ export default function ProfilePage() {
     // Add to state definitions
     const [trustBreakdown, setTrustBreakdown] = useState<any>(null);
     const [educationList, setEducationList] = useState<any[]>([]);
+    const [visibility, setVisibility] = useState<any>({
+        linkedin: true, codeforces: true, leetcode: true,
+        education: true, achievements: true, ratings: true
+    });
+    const [platformStats, setPlatformStats] = useState<any>({});
 
     useEffect(() => {
         const token = Cookies.get("token");
@@ -84,6 +89,8 @@ export default function ProfilePage() {
             setRatings(u.ratings_received || []);
             setTrustBreakdown(u.trust_score_breakdown || null);
             setEducationList(u.education || []);
+            if (u.visibility_settings) setVisibility(u.visibility_settings);
+            if (u.platform_stats) setPlatformStats(u.platform_stats);
         }).finally(() => setLoading(false));
     }, []);
 
@@ -115,6 +122,13 @@ export default function ProfilePage() {
     const addSocialLink = () => { if (newLinkUrl && newLinkPlatform) { setSocialLinks([...socialLinks, { platform: newLinkPlatform, url: newLinkUrl }]); setNewLinkUrl(""); setNewLinkPlatform(""); } };
     const addProfLink = () => { if (newProfUrl && newProfPlatform) { setProfLinks([...profLinks, { platform: newProfPlatform, url: newProfUrl }]); setNewProfUrl(""); setNewProfPlatform(""); } };
     const addAchievement = () => { if (achTitle) { setAchievements([...achievements, { title: achTitle, description: achDesc }]); setAchTitle(""); setAchDesc(""); } };
+    const toggleVisibility = async (key: string) => {
+        const newSettings = { ...visibility, [key]: !visibility[key] };
+        setVisibility(newSettings);
+        // Auto-save visibility preferences
+        try { await api.put("/users/visibility", { settings: newSettings }); }
+        catch (e) { console.error(e); }
+    };
     const toggleDay = (i: number) => { const n = [...availability]; n[i].enabled = !n[i].enabled; setAvailability(n); };
     const addSlot = (i: number) => { const n = [...availability]; n[i].slots.push({ start: "09:00", end: "12:00" }); setAvailability(n); };
     const removeSlot = (d: number, s: number) => { const n = [...availability]; n[d].slots = n[d].slots.filter((_, idx) => idx !== s); setAvailability(n); };
@@ -161,6 +175,96 @@ export default function ProfilePage() {
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
 
                     {/* LEFT COLUMN: IDENTITY & VERIFICATIONS */}
+
+                    {/* 1. TRUST SCORE BREAKDOWN UI (Put this under the "Identity" card) */}
+                    {trustBreakdown && (
+                        <div className="bg-[#0f0f0f] border border-white/5 p-6 rounded-[2rem] mt-6">
+                            <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-purple-400">
+                                <ShieldCheck className="w-5 h-5" /> Trust Score Analysis
+                            </h3>
+                            <div className="space-y-3">
+                                <div className="flex justify-between items-center bg-black p-3 rounded-xl border border-white/10">
+                                    <span className="text-gray-400 text-sm">Base Score</span>
+                                    <span className="text-green-400 font-bold">5.0</span>
+                                </div>
+                                {trustBreakdown.details.map((detail: string, i: number) => (
+                                    <div key={i} className="flex justify-between items-center bg-black p-3 rounded-xl border border-white/10">
+                                        <span className="text-gray-300 text-sm">{detail.split(":")[0]}</span>
+                                        <span className="text-green-400 text-xs font-mono">{detail.split(":")[1]}</span>
+                                    </div>
+                                ))}
+                                <div className="pt-2 border-t border-white/10 flex justify-between text-lg font-black text-white">
+                                    <span>TOTAL</span>
+                                    <span>{trustBreakdown.base + trustBreakdown.github + trustBreakdown.linkedin + trustBreakdown.codeforces + trustBreakdown.leetcode} / 10.0</span>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 2. UPDATED VERIFICATIONS CARD (With Stats & Toggles) */}
+                    <div className="bg-gradient-to-br from-[#1a1a1a] to-black border border-yellow-500/20 p-6 rounded-[2rem]">
+                        <h3 className="text-lg font-bold text-yellow-500 mb-6 flex items-center gap-2">
+                            <Zap className="w-5 h-5" /> Connected Accounts
+                        </h3>
+
+                        <div className="space-y-4">
+                            {/* Codeforces Example */}
+                            <div className="bg-black border border-white/5 rounded-2xl p-4">
+                                <div className="flex justify-between items-start mb-2">
+                                    <div className="flex items-center gap-3">
+                                        <Code className="w-5 h-5 text-gray-400" />
+                                        <span className="font-bold text-sm">Codeforces</span>
+                                    </div>
+                                    {connectedAccounts.codeforces ? (
+                                        <button onClick={() => toggleVisibility('codeforces')} className="text-gray-500 hover:text-white">
+                                            {visibility.codeforces ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                                        </button>
+                                    ) : (
+                                        <button onClick={() => connectPlatform('codeforces')} className="text-xs bg-white/10 px-2 py-1 rounded text-white hover:bg-white/20">Connect</button>
+                                    )}
+                                </div>
+
+                                {/* SHOW THE STATS IF CONNECTED */}
+                                {connectedAccounts.codeforces && platformStats.codeforces && (
+                                    <div className="grid grid-cols-2 gap-2 mt-3">
+                                        <div className="bg-white/5 p-2 rounded-lg text-center">
+                                            <div className="text-[10px] text-gray-500 uppercase">Rating</div>
+                                            <div className="text-lg font-black text-yellow-500">{platformStats.codeforces.rating}</div>
+                                        </div>
+                                        <div className="bg-white/5 p-2 rounded-lg text-center">
+                                            <div className="text-[10px] text-gray-500 uppercase">Rank</div>
+                                            <div className="text-sm font-bold text-white">{platformStats.codeforces.rank}</div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* LeetCode Example */}
+                            <div className="bg-black border border-white/5 rounded-2xl p-4">
+                                <div className="flex justify-between items-start mb-2">
+                                    <div className="flex items-center gap-3">
+                                        <Code2 className="w-5 h-5 text-gray-400" />
+                                        <span className="font-bold text-sm">LeetCode</span>
+                                    </div>
+                                    {connectedAccounts.leetcode ? (
+                                        <button onClick={() => toggleVisibility('leetcode')} className="text-gray-500 hover:text-white">
+                                            {visibility.leetcode ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                                        </button>
+                                    ) : (
+                                        <button onClick={() => connectPlatform('leetcode')} className="text-xs bg-white/10 px-2 py-1 rounded text-white hover:bg-white/20">Connect</button>
+                                    )}
+                                </div>
+
+                                {connectedAccounts.leetcode && platformStats.leetcode && (
+                                    <div className="mt-3 bg-white/5 p-2 rounded-lg text-center">
+                                        <div className="text-[10px] text-gray-500 uppercase">Problems Solved</div>
+                                        <div className="text-lg font-black text-orange-500">{platformStats.leetcode.total_solved}</div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
                     <div className="lg:col-span-4 space-y-8">
                         <div className="bg-[#0f0f0f] border border-white/5 p-6 rounded-[2rem] shadow-xl">
                             <h3 className="text-lg font-bold mb-6 flex items-center gap-2 text-purple-400"><User className="w-5 h-5" /> Identity</h3>

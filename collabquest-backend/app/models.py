@@ -57,6 +57,15 @@ class Education(BaseModel):
     is_completed: bool = False
     is_visible: bool = True # User option to showcase in profile
 
+class VisibilitySettings(BaseModel):
+    # Default to True (visible)
+    linkedin: bool = True
+    codeforces: bool = True
+    leetcode: bool = True
+    education: bool = True
+    achievements: bool = True
+    ratings: bool = True
+
 # --- VOTING & REQUEST MODELS ---
 class DeletionRequest(BaseModel):
     is_active: bool = False
@@ -125,6 +134,9 @@ class User(Document):
 
     accepted_chat_requests: List[str] = [] 
     embedding: List[float] = [] 
+
+    platform_stats: Dict[str, dict] = Field(default_factory=dict) # Stores raw data like {"codeforces": {"rating": 1400}}
+    visibility_settings: VisibilitySettings = Field(default_factory=VisibilitySettings)
     
     class Settings: name = "users"
 
