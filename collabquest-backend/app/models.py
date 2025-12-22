@@ -53,12 +53,11 @@ class TrustBreakdown(BaseModel):
 class Education(BaseModel):
     institute: str
     course: str
-    year_of_study: Optional[str] = None # Optional: Don't ask if completed
+    year_of_study: Optional[str] = None 
     is_completed: bool = False
-    is_visible: bool = True # User option to showcase in profile
+    is_visible: bool = True 
 
 class VisibilitySettings(BaseModel):
-    # Default to True (visible)
     linkedin: bool = True
     codeforces: bool = True
     leetcode: bool = True
@@ -107,7 +106,7 @@ class User(Document):
     
     # Trust Score
     trust_score: float = Field(default=5.0)
-    trust_score_breakdown: TrustBreakdown = Field(default_factory=TrustBreakdown) # Detailed Analysis
+    trust_score_breakdown: TrustBreakdown = Field(default_factory=TrustBreakdown) 
     
     rating_count: int = Field(default=1) 
     is_verified_student: bool = False
@@ -123,20 +122,21 @@ class User(Document):
     
     # Academic Qualifications
     education: List[Education] = [] 
-    school: Optional[str] = None # Deprecated, kept for compatibility
+    school: Optional[str] = None # Deprecated
     
     social_links: List[Link] = []
     professional_links: List[Link] = []
     achievements: List[Achievement] = []
     
+    # Platform Data
     connected_accounts: ConnectedAccounts = Field(default_factory=ConnectedAccounts)
+    platform_stats: Dict[str, dict] = Field(default_factory=dict) # Stores verified stats
+    visibility_settings: VisibilitySettings = Field(default_factory=VisibilitySettings) # Privacy toggles
+
     ratings_received: List[Rating] = []
 
     accepted_chat_requests: List[str] = [] 
     embedding: List[float] = [] 
-
-    platform_stats: Dict[str, dict] = Field(default_factory=dict) # Stores raw data like {"codeforces": {"rating": 1400}}
-    visibility_settings: VisibilitySettings = Field(default_factory=VisibilitySettings)
     
     class Settings: name = "users"
 

@@ -18,6 +18,11 @@ export default function PublicProfile() {
             .finally(() => setLoading(false));
     }, [params.id]);
 
+    const isVisible = (key: string) => {
+        if (!user || !user.visibility_settings) return true; 
+        return user.visibility_settings[key];
+    };
+
     if (loading) return <div className="h-screen bg-black text-white flex items-center justify-center"><Loader2 className="animate-spin" /></div>;
     if (!user) return null;
 
@@ -57,18 +62,70 @@ export default function PublicProfile() {
                         </div>
                     </div>
 
-                    {/* Ratings */}
-                    <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl">
-                        <h3 className="font-bold mb-4 flex items-center gap-2 text-yellow-400"><Star className="w-4 h-4"/> Ratings</h3>
-                        <div className="space-y-3">
-                            {user.ratings_received?.slice(0, 3).map((r:any, i:number) => (
-                                <div key={i} className="text-sm border-b border-gray-800 pb-2">
-                                    <p className="font-bold">{r.project_name} - {r.score}/10</p>
-                                    <p className="text-gray-500 italic text-xs">"{r.explanation}"</p>
+                    {/* Stats & Education Column */}
+                    <div className="space-y-6">
+                        {/* Education (New) */}
+                        {isVisible('education') && user.education && user.education.length > 0 && (
+                             <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl">
+                                <h3 className="font-bold mb-4 flex items-center gap-2 text-purple-400"><GraduationCap className="w-4 h-4"/> Education</h3>
+                                <div className="space-y-4">
+                                    {user.education.filter((e:any) => e.is_visible).map((edu:any, i:number) => (
+                                        <div key={i} className="border-l-2 border-purple-500 pl-4">
+                                            <div className="font-bold">{edu.institute}</div>
+                                            <div className="text-sm text-gray-400">{edu.course}</div>
+                                            <div className="text-xs text-gray-500 mt-1">{edu.is_completed ? "Completed" : `${edu.year_of_study} Year`}</div>
+                                        </div>
+                                    ))}
                                 </div>
-                            )) || <p className="text-gray-500 text-sm">No ratings yet.</p>}
-                        </div>
+                             </div>
+                        )}
+
+                        {/* Codeforces Stats */}
+                        {isVisible('codeforces') && user.platform_stats?.codeforces && (
+                            <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl">
+                                <h3 className="font-bold mb-4 flex items-center gap-2 text-yellow-400">Codeforces Stats</h3>
+                                <div className="flex gap-4">
+                                    <div className="text-center">
+                                        <div className="text-2xl font-bold">{user.platform_stats.codeforces.rating}</div>
+                                        <div className="text-xs text-gray-500">Rating</div>
+                                    </div>
+                                    <div className="text-center">
+                                        <div className="text-lg font-bold text-gray-300">{user.platform_stats.codeforces.rank}</div>
+                                        <div className="text-xs text-gray-500">Rank</div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* LeetCode Stats */}
+                        {isVisible('leetcode') && user.platform_stats?.leetcode && (
+                            <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl">
+                                    <h3 className="font-bold mb-4 flex items-center gap-2 text-orange-400">LeetCode Stats</h3>
+                                    <div className="text-center bg-gray-800 p-4 rounded-xl">
+                                    <div className="text-3xl font-black text-white">{user.platform_stats.leetcode.total_solved}</div>
+                                    <div className="text-xs text-gray-500 uppercase tracking-widest">Problems Solved</div>
+                                    </div>
+                            </div>
+                        )}
                     </div>
+
+                    {/* Ratings */}
+                    {isVisible('ratings') && (
+                        <div className="bg-gray-900 border border-gray-800 p-6 rounded-2xl md:col-span-2">
+                            <h3 className="font-bold mb-4 flex items-center gap-2 text-yellow-400"><Star className="w-4 h-4"/> Ratings</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {user.ratings_received?.slice(0, 4).map((r:any, i:number) => (
+                                    <div key={i} className="text-sm border border-gray-800 p-4 rounded-xl bg-black">
+                                        <div className="flex justify-between mb-2">
+                                            <span className="font-bold text-white">{r.project_name}</span>
+                                            <span className="text-yellow-500 font-bold">{r.score}/10</span>
+                                        </div>
+                                        <p className="text-gray-500 italic text-xs">"{r.explanation}"</p>
+                                    </div>
+                                )) || <p className="text-gray-500 text-sm">No ratings yet.</p>}
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

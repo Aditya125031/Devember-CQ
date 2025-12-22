@@ -15,6 +15,13 @@ GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
 
+# --- HEADERS TO MIMIC A BROWSER ---
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/html, application/xhtml+xml, application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+}
+
 async def get_github_token(code: str):
     """Exchange the login code for a permanent access token"""
     url = "https://github.com/login/oauth/access_token"
@@ -82,14 +89,16 @@ def calculate_trust_score(github_data: dict) -> tuple[float, dict]:
 async def fetch_codeforces_stats(handle: str):
     """Fetches user stats from Codeforces API to verify existence and score."""
     url = f"https://codeforces.com/api/user.info?handles={handle}"
+    # Use headers to avoid 403 Forbidden
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.get(url, timeout=10.0)
+            resp = await client.get(url, headers=HEADERS, timeout=10.0)
             if resp.status_code == 200:
                 data = resp.json()
                 if data["status"] == "OK":
                     return data["result"][0]
-        except Exception:
+        except Exception as e:
+            print(f"Codeforces Fetch Error: {e}")
             pass
     return None
 
@@ -109,14 +118,24 @@ async def fetch_leetcode_stats(username: str):
       }
     }
     """
+    # LeetCode specifically requires Referer and User-Agent
+    lc_headers = HEADERS.copy()
+    lc_headers["Referer"] = f"https://leetcode.com/{username}/"
+    
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.post(url, json={"query": query, "variables": {"username": username}}, timeout=10.0)
+            resp = await client.post(
+                url, 
+                json={"query": query, "variables": {"username": username}}, 
+                headers=lc_headers, 
+                timeout=10.0
+            )
             if resp.status_code == 200:
                 data = resp.json()
                 if "data" in data and data["data"] and data["data"]["matchedUser"]:
                     return data["data"]["matchedUser"]
-        except Exception:
+        except Exception as e:
+            print(f"LeetCode Fetch Error: {e}")
             pass
     return None
 

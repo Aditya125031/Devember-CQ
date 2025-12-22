@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Optional
 from pydantic import BaseModel
-from app.models import User, Skill, DayAvailability, TimeRange, Block, Link, Achievement, ConnectedAccounts, Education
+from app.models import User, Skill, DayAvailability, TimeRange, Block, Link, Achievement, ConnectedAccounts, Education, VisibilitySettings
 from app.auth.dependencies import get_current_user
 from app.services.vector_store import generate_embedding
 from app.auth.utils import fetch_codeforces_stats, fetch_leetcode_stats
@@ -29,7 +29,6 @@ class ConnectRequest(BaseModel):
 class SkillsUpdate(BaseModel):
     skills: List[str]
 
-# Add a model to handle visibility updates
 class VisibilityUpdate(BaseModel):
     settings: VisibilitySettings
 
@@ -48,8 +47,13 @@ async def update_trust_score(user: User):
     
     # 1. Codeforces
     if user.connected_accounts.codeforces:
-        stats = await fetch_codeforces_stats(user.connected_accounts.codeforces)
-        if stats and "rating" in stats:
+        # Check stored stats first to avoid spamming API on every profile update
+        stats = user.platform_stats.get("codeforces")
+        # If not in platform_stats, try fetching (fallback)
+        if not stats:
+             stats = await fetch_codeforces_stats(user.connected_accounts.codeforces)
+             
+        if stats and "rating" in stats and stats["rating"] != "Unrated":
             rating = stats["rating"]
             points = 0.0
             if rating >= 1200: points = 1.0
@@ -60,12 +64,12 @@ async def update_trust_score(user: User):
             
     # 2. LeetCode
     if user.connected_accounts.leetcode:
-        stats = await fetch_leetcode_stats(user.connected_accounts.leetcode)
-        if stats:
-            total_solved = 0
-            for item in stats["submitStats"]["acSubmissionNum"]:
-                if item["difficulty"] == "All":
-                    total_solved = item["count"]
+        stats = user.platform_stats.get("leetcode")
+        if not stats:
+            stats = await fetch_leetcode_stats(user.connected_accounts.leetcode)
+
+        if stats and "total_solved" in stats:
+            total_solved = stats["total_solved"]
             points = 0.0
             if total_solved >= 50: points = 0.5
             if total_solved >= 100: points = 1.0
@@ -112,70 +116,75 @@ async def update_profile(data: ProfileUpdate, current_user: User = Depends(get_c
     await current_user.save()
     return current_user
 
+@router.put("/visibility", response_model=User)
+async def update_visibility(data: VisibilityUpdate, current_user: User = Depends(get_current_user)):
+    current_user.visibility_settings = data.settings
+    await current_user.save()
+    return current_user
+
 @router.post("/connect/{platform}")
 async def connect_platform(platform: str, req: ConnectRequest, current_user: User = Depends(get_current_user)):
+    """
+    Connects external platforms, verifies them by fetching data, and boosts trust score.
+    """
     platform = platform.lower()
     stats_data = {}
 
-    # 1. LINKEDIN (Verification is just URL check for now)
     if platform == "linkedin":
+        # Basic URL validation as we can't easily fetch private LinkedIn data
         if "linkedin.com/in/" not in req.handle_or_url:
             raise HTTPException(400, "Invalid LinkedIn Profile URL")
         current_user.connected_accounts.linkedin = req.handle_or_url
         stats_data = {"url": req.handle_or_url, "verified": True}
         
-    # 2. CODEFORCES (Verification is fetching the API)
     elif platform == "codeforces":
+        # Verify handle exists
         stats = await fetch_codeforces_stats(req.handle_or_url)
         if not stats:
-            raise HTTPException(404, "Codeforces handle not found") # <--- THIS IS THE VERIFICATION
-        
-        # Save specific stats we want to show
+            raise HTTPException(404, "Codeforces handle not found")
+        current_user.connected_accounts.codeforces = req.handle_or_url
         stats_data = {
             "handle": req.handle_or_url,
             "rating": stats.get("rating", "Unrated"),
             "rank": stats.get("rank", "Newbie"),
             "maxRating": stats.get("maxRating", 0)
         }
-        current_user.connected_accounts.codeforces = req.handle_or_url
         
-    # 3. LEETCODE (Verification is fetching the API)
     elif platform == "leetcode":
+        # Verify user exists
         stats = await fetch_leetcode_stats(req.handle_or_url)
         if not stats:
-            raise HTTPException(404, "LeetCode user not found") # <--- THIS IS THE VERIFICATION
-            
-        # Extract total solved
+            raise HTTPException(404, "LeetCode user not found")
+        
         total_solved = 0
-        ac_submissions = stats.get("submitStats", {}).get("acSubmissionNum", [])
-        for item in ac_submissions:
-            if item["difficulty"] == "All":
-                total_solved = item["count"]
-                
+        if "submitStats" in stats:
+            ac_submissions = stats.get("submitStats", {}).get("acSubmissionNum", [])
+            for item in ac_submissions:
+                if item["difficulty"] == "All":
+                    total_solved = item["count"]
+
+        current_user.connected_accounts.leetcode = req.handle_or_url
         stats_data = {
             "username": req.handle_or_url,
-            "total_solved": total_solved,
-            # Note: Daily streak is hard to get via public API, usually requires authentication
+            "total_solved": total_solved
         }
-        current_user.connected_accounts.leetcode = req.handle_or_url
     
     else:
         raise HTTPException(400, "Invalid platform")
 
-    # SAVE THE STATS TO THE DATABASE
+    # SAVE STATS
     if not current_user.platform_stats:
         current_user.platform_stats = {}
-    
     current_user.platform_stats[platform] = stats_data
-    
-    # Update Trust Score (Existing Logic)
+
     await update_trust_score(current_user)
-    
     await current_user.save()
         
     return {
         "status": "connected", 
         "trust_score": current_user.trust_score, 
+        "breakdown": current_user.trust_score_breakdown,
+        "account": req.handle_or_url,
         "stats": stats_data
     }
 
