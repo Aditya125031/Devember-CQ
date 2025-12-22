@@ -5,8 +5,8 @@ import Cookies from "js-cookie";
 import api from "@/lib/api";
 import { motion, AnimatePresence } from "framer-motion";
 import GlobalHeader from "@/components/GlobalHeader";
-import { 
-    Save, ArrowLeft, Clock, Calendar, Code2, Star, Heart, User, Plus, X, 
+import {
+    Save, ArrowLeft, Clock, Calendar, Code2, Star, Heart, User, Plus, X,
     Trash2, Zap, CheckCircle, AlertTriangle, Briefcase, Eye, EyeOff, Check,
     GraduationCap, Award, Linkedin, Code, ExternalLink, ShieldCheck, Loader2,
     Globe, Twitter, Github, Instagram
@@ -61,6 +61,10 @@ export default function ProfilePage() {
     const [timer, setTimer] = useState(30);
     const [quizResult, setQuizResult] = useState<any>(null);
 
+    // Add to state definitions
+    const [trustBreakdown, setTrustBreakdown] = useState<any>(null);
+    const [educationList, setEducationList] = useState<any[]>([]);
+
     useEffect(() => {
         const token = Cookies.get("token");
         if (!token) return router.push("/");
@@ -78,6 +82,8 @@ export default function ProfilePage() {
             setAchievements(u.achievements || []);
             setConnectedAccounts(u.connected_accounts || {});
             setRatings(u.ratings_received || []);
+            setTrustBreakdown(u.trust_score_breakdown || null);
+            setEducationList(u.education || []);
         }).finally(() => setLoading(false));
     }, []);
 
@@ -88,7 +94,8 @@ export default function ProfilePage() {
                 skills: skills.map(s => s.name),
                 is_looking_for_team: isLookingForTeam,
                 age, school, social_links: socialLinks,
-                professional_links: profLinks, achievements
+                professional_links: profLinks, achievements,
+                education: educationList,
             });
             alert("Profile Saved!");
         } catch (err) { alert("Save failed"); }
@@ -112,7 +119,7 @@ export default function ProfilePage() {
     const addSlot = (i: number) => { const n = [...availability]; n[i].slots.push({ start: "09:00", end: "12:00" }); setAvailability(n); };
     const removeSlot = (d: number, s: number) => { const n = [...availability]; n[d].slots = n[d].slots.filter((_, idx) => idx !== s); setAvailability(n); };
     const updateSlot = (d: number, s: number, f: 'start' | 'end', v: string) => { const n = [...availability]; n[d].slots[s][f] = v; setAvailability(n); };
-    
+
     const startSkillTest = async (skill: string) => { if (!confirm(`Start verification for ${skill}?`)) return; setQuizSkill(skill); setLoading(true); try { const res = await api.get(`/skills/start/${skill}`); setQuestions(res.data.questions); setShowQuiz(true); setCurrentQ(0); setUserAnswers([]); setQuizResult(null); setTimer(15); } catch (err) { alert("Error loading test."); } finally { setLoading(false); } };
     const handleAnswer = (optionIndex: number) => { const newAns = [...userAnswers, { id: questions[currentQ].id, selected: optionIndex }]; setUserAnswers(newAns); if (currentQ < questions.length - 1) { setCurrentQ(currentQ + 1); setTimer(15); } else { submitQuiz(newAns); } };
     useEffect(() => { if (!showQuiz || quizResult) return; if (timer > 0) { const t = setTimeout(() => setTimer(timer - 1), 1000); return () => clearTimeout(t); } else { handleAnswer(-1); } }, [timer, showQuiz, quizResult]);
@@ -123,7 +130,7 @@ export default function ProfilePage() {
     return (
         <div className="min-h-screen bg-[#050505] text-white pb-20">
             <GlobalHeader />
-            
+
             <main className="max-w-7xl mx-auto px-4 py-8">
                 {/* TOP BAR */}
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-10">
@@ -138,7 +145,7 @@ export default function ProfilePage() {
                     </div>
 
                     <div className="flex items-center gap-3 w-full md:w-auto">
-                        <button 
+                        <button
                             onClick={() => setIsLookingForTeam(!isLookingForTeam)}
                             className={`flex-1 md:flex-none px-5 py-2.5 rounded-2xl font-bold flex items-center justify-center gap-2 text-sm transition-all border ${isLookingForTeam ? 'bg-green-500/10 border-green-500/50 text-green-400' : 'bg-white/5 border-white/10 text-gray-400'}`}
                         >
@@ -152,7 +159,7 @@ export default function ProfilePage() {
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                    
+
                     {/* LEFT COLUMN: IDENTITY & VERIFICATIONS */}
                     <div className="lg:col-span-4 space-y-8">
                         <div className="bg-[#0f0f0f] border border-white/5 p-6 rounded-[2rem] shadow-xl">
@@ -167,9 +174,60 @@ export default function ProfilePage() {
                                 </div>
                                 <div>
                                     <label className="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-2 block">Institute / Organization</label>
-                                    <div className="relative">
-                                        <GraduationCap className="absolute left-3 top-3.5 w-4 h-4 text-gray-500" />
-                                        <input className="w-full bg-black border border-white/10 rounded-xl p-3 pl-10 text-sm focus:border-purple-500 transition-all outline-none" placeholder="University Name" value={school} onChange={e => setSchool(e.target.value)} />
+                                    {/* Replace the old School input div with this */}
+                                    <div className="bg-[#0f0f0f] border border-white/5 p-6 rounded-[2rem]">
+                                        <h3 className="text-lg font-bold mb-6 flex items-center gap-2 text-purple-400">
+                                            <GraduationCap className="w-5 h-5" /> Education
+                                        </h3>
+
+                                        <div className="space-y-4">
+                                            {educationList.map((edu, index) => (
+                                                <div key={index} className="p-4 bg-black border border-white/10 rounded-xl relative">
+                                                    {/* Delete Button */}
+                                                    <button onClick={() => setEducationList(educationList.filter((_, i) => i !== index))}
+                                                        className="absolute top-2 right-2 text-gray-600 hover:text-red-500">
+                                                        <X className="w-4 h-4" />
+                                                    </button>
+
+                                                    {/* Fields */}
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-2">
+                                                        <input placeholder="Institute" value={edu.institute}
+                                                            onChange={(e) => { const n = [...educationList]; n[index].institute = e.target.value; setEducationList(n); }}
+                                                            className="bg-white/5 border border-white/10 rounded-lg p-2 text-sm outline-none" />
+
+                                                        <input placeholder="Course (e.g. B.Tech)" value={edu.course}
+                                                            onChange={(e) => { const n = [...educationList]; n[index].course = e.target.value; setEducationList(n); }}
+                                                            className="bg-white/5 border border-white/10 rounded-lg p-2 text-sm outline-none" />
+                                                    </div>
+
+                                                    <div className="flex items-center gap-4 text-xs text-gray-400">
+                                                        <label className="flex items-center gap-2 cursor-pointer">
+                                                            <input type="checkbox" checked={edu.is_completed}
+                                                                onChange={(e) => { const n = [...educationList]; n[index].is_completed = e.target.checked; setEducationList(n); }} />
+                                                            Completed
+                                                        </label>
+
+                                                        {/* Only show Year if NOT completed */}
+                                                        {!edu.is_completed && (
+                                                            <input placeholder="Year (e.g. 3rd)" value={edu.year_of_study || ""}
+                                                                onChange={(e) => { const n = [...educationList]; n[index].year_of_study = e.target.value; setEducationList(n); }}
+                                                                className="bg-white/5 border-b border-white/20 p-1 outline-none w-20" />
+                                                        )}
+
+                                                        <label className="flex items-center gap-2 cursor-pointer ml-auto">
+                                                            <input type="checkbox" checked={edu.is_visible}
+                                                                onChange={(e) => { const n = [...educationList]; n[index].is_visible = e.target.checked; setEducationList(n); }} />
+                                                            Visible in Profile
+                                                        </label>
+                                                    </div>
+                                                </div>
+                                            ))}
+
+                                            <button onClick={() => setEducationList([...educationList, { institute: "", course: "", is_completed: false, is_visible: true }])}
+                                                className="w-full py-3 border border-dashed border-white/20 text-gray-500 rounded-xl hover:bg-white/5 hover:text-white transition">
+                                                + Add Education
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                                 <div>
@@ -186,14 +244,14 @@ export default function ProfilePage() {
                             </div>
                             <div className="space-y-3">
                                 {[
-                                    { id: 'linkedin', icon: <Linkedin className="w-4 h-4"/>, label: 'LinkedIn' },
-                                    { id: 'codeforces', icon: <Code className="w-4 h-4"/>, label: 'Codeforces' },
-                                    { id: 'leetcode', icon: <Code2 className="w-4 h-4"/>, label: 'LeetCode' }
+                                    { id: 'linkedin', icon: <Linkedin className="w-4 h-4" />, label: 'LinkedIn' },
+                                    { id: 'codeforces', icon: <Code className="w-4 h-4" />, label: 'Codeforces' },
+                                    { id: 'leetcode', icon: <Code2 className="w-4 h-4" />, label: 'LeetCode' }
                                 ].map((acc) => (
-                                    <button 
+                                    <button
                                         key={acc.id}
-                                        onClick={() => connectPlatform(acc.id)} 
-                                        disabled={!!connectedAccounts[acc.id]} 
+                                        onClick={() => connectPlatform(acc.id)}
+                                        disabled={!!connectedAccounts[acc.id]}
                                         className={`w-full p-4 rounded-2xl flex items-center justify-between text-sm font-bold transition-all border ${connectedAccounts[acc.id] ? 'bg-white/5 border-white/10 text-gray-400' : 'bg-black border-white/5 hover:border-white/20'}`}
                                     >
                                         <span className="flex items-center gap-3">{acc.icon} {acc.label}</span>
@@ -206,7 +264,7 @@ export default function ProfilePage() {
 
                     {/* RIGHT COLUMN: EXPERTISE, SOCIALS, ACHIEVEMENTS */}
                     <div className="lg:col-span-8 space-y-8">
-                        
+
                         {/* EXPERTISE SECTION */}
                         <div className="bg-[#0f0f0f] border border-white/5 p-8 rounded-[2.5rem]">
                             <div className="flex justify-between items-center mb-8">
@@ -216,7 +274,7 @@ export default function ProfilePage() {
                                     {PRESET_SKILLS.filter(s => !skills.find(sk => sk.name === s)).map(s => <option key={s} value={s}>{s}</option>)}
                                 </select>
                             </div>
-                            
+
                             <div className="flex flex-wrap gap-3">
                                 {skills.length > 0 ? skills.map(s => (
                                     <div key={s.name} className="group relative flex items-center gap-2 bg-black border border-white/10 pl-4 pr-2 py-2 rounded-2xl hover:border-blue-500/50 transition-all">
@@ -236,16 +294,16 @@ export default function ProfilePage() {
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div className="bg-[#0f0f0f] border border-white/5 p-6 rounded-[2rem] flex flex-col">
                                 <h3 className="font-bold mb-6 text-pink-400 flex items-center gap-2"><Heart className="w-5 h-5" /> Social Presence</h3>
-                                
+
                                 <div className="space-y-2 flex-1 overflow-y-auto max-h-60 mb-6 pr-1 custom-scrollbar">
                                     {socialLinks.length > 0 ? socialLinks.map((l, i) => (
                                         <div key={i} className="flex items-center justify-between bg-black border border-white/5 p-3 rounded-xl group transition-all hover:bg-white/5">
                                             <div className="flex items-center gap-3 overflow-hidden">
                                                 <div className="p-2 bg-white/5 rounded-lg text-gray-400">
-                                                    {l.platform.toLowerCase() === 'twitter' ? <Twitter className="w-3.5 h-3.5" /> : 
-                                                     l.platform.toLowerCase() === 'github' ? <Github className="w-3.5 h-3.5" /> : 
-                                                     l.platform.toLowerCase() === 'instagram' ? <Instagram className="w-3.5 h-3.5" /> : 
-                                                     <Globe className="w-3.5 h-3.5" />}
+                                                    {l.platform.toLowerCase() === 'twitter' ? <Twitter className="w-3.5 h-3.5" /> :
+                                                        l.platform.toLowerCase() === 'github' ? <Github className="w-3.5 h-3.5" /> :
+                                                            l.platform.toLowerCase() === 'instagram' ? <Instagram className="w-3.5 h-3.5" /> :
+                                                                <Globe className="w-3.5 h-3.5" />}
                                                 </div>
                                                 <div className="flex flex-col overflow-hidden">
                                                     <span className="text-[10px] font-bold text-gray-500 uppercase">{l.platform}</span>
@@ -278,7 +336,7 @@ export default function ProfilePage() {
                             {/* ACHIEVEMENTS REFINED */}
                             <div className="bg-[#0f0f0f] border border-white/5 p-6 rounded-[2rem] flex flex-col">
                                 <h3 className="font-bold mb-6 text-orange-400 flex items-center gap-2"><Award className="w-5 h-5" /> Achievements</h3>
-                                
+
                                 <div className="space-y-2 flex-1 overflow-y-auto max-h-60 mb-6 pr-1 custom-scrollbar">
                                     {achievements.length > 0 ? achievements.map((a, i) => (
                                         <div key={i} className="bg-black border border-white/5 p-3 rounded-xl group relative hover:bg-white/5 transition-all">
