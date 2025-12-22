@@ -45,8 +45,11 @@ async def get_github_user(token: str):
 
 def calculate_trust_score(github_data: dict) -> tuple[float, dict]:
     """
-    Hackathon Magic: Calculate 'Trust' based on GitHub stats.
-    Returns: (total_score, breakdown_dict)
+    Revised Trust Score Logic:
+    - Base: 5.0
+    - Github Max: 1.5 (Repos, Followers, Age)
+    - Others Max: 0.5 (Handled in user_routes)
+    - Total Max: 7.0
     """
     base_score = 5.0
     
@@ -63,10 +66,15 @@ def calculate_trust_score(github_data: dict) -> tuple[float, dict]:
         except:
             pass
     
-    # Calculate Bonus
-    repo_points = min(2.0, public_repos * 0.1) # Max 2 points for repos
-    follower_points = min(2.0, followers * 0.2) # Max 2 points for followers
-    age_points = min(1.0, account_age_years * 0.5) # Max 1 point for age
+    # Calculate Github Boost (Max 1.5)
+    # 1. Repos: 0.02 per repo -> Max 0.5 (at 25 repos)
+    repo_points = min(0.5, public_repos * 0.02)
+    
+    # 2. Followers: 0.05 per follower -> Max 0.5 (at 10 followers)
+    follower_points = min(0.5, followers * 0.05)
+    
+    # 3. Account Age: 0.2 per year -> Max 0.5 (at 2.5 years)
+    age_points = min(0.5, account_age_years * 0.2)
     
     github_total = round(repo_points + follower_points + age_points, 1)
     
@@ -83,13 +91,13 @@ def calculate_trust_score(github_data: dict) -> tuple[float, dict]:
         ]
     }
     
+    # Return Base + Github only (Others added later)
     total = base_score + github_total
-    return round(min(10.0, total), 1), breakdown
+    return round(min(7.0, total), 1), breakdown
 
 async def fetch_codeforces_stats(handle: str):
     """Fetches user stats from Codeforces API to verify existence and score."""
     url = f"https://codeforces.com/api/user.info?handles={handle}"
-    # Use headers to avoid 403 Forbidden
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.get(url, headers=HEADERS, timeout=10.0)
@@ -118,7 +126,6 @@ async def fetch_leetcode_stats(username: str):
       }
     }
     """
-    # LeetCode specifically requires Referer and User-Agent
     lc_headers = HEADERS.copy()
     lc_headers["Referer"] = f"https://leetcode.com/{username}/"
     
@@ -140,26 +147,22 @@ async def fetch_leetcode_stats(username: str):
     return None
 
 def create_access_token(data: dict):
-    """Create a JWT token for our frontend to use"""
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(days=7) # Token lasts 7 days
+    expire = datetime.utcnow() + timedelta(days=7)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 def hash_password(password: str) -> str:
-    """Hash a password using bcrypt"""
     password_bytes = password[:72].encode('utf-8')
     salt = bcrypt.gensalt(rounds=12)
     return bcrypt.hashpw(password_bytes, salt).decode('utf-8')
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash"""
     password_bytes = plain_password[:72].encode('utf-8')
     hashed_bytes = hashed_password.encode('utf-8')
     return bcrypt.checkpw(password_bytes, hashed_bytes)
 
 async def get_google_token(code: str, redirect_uri: str):
-    """Exchange Google authorization code for access token"""
     url = "https://oauth2.googleapis.com/token"
     data = {
         "client_id": GOOGLE_CLIENT_ID,
@@ -174,7 +177,6 @@ async def get_google_token(code: str, redirect_uri: str):
         return response.json().get("access_token")
 
 async def get_google_user(token: str):
-    """Fetch user profile from Google using access token"""
     async with httpx.AsyncClient() as client:
         headers = {"Authorization": f"Bearer {token}"}
         response = await client.get(
@@ -184,7 +186,6 @@ async def get_google_user(token: str):
         return response.json()
     
 def verify_token(token: str):
-    """Decode and verify the JWT token manually"""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload

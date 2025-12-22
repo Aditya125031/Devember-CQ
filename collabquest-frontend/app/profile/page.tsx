@@ -144,6 +144,8 @@ export default function ProfilePage() {
 
     if (loading) return <div className="h-screen bg-gray-950 flex items-center justify-center"><Loader2 className="animate-spin text-purple-500" /></div>;
 
+    const totalTrust = trustBreakdown ? (trustBreakdown.base + trustBreakdown.github + trustBreakdown.linkedin + trustBreakdown.codeforces + trustBreakdown.leetcode) : 5.0;
+
     return (
         <div className="min-h-screen bg-[#050505] text-white pb-20">
             <GlobalHeader />
@@ -196,27 +198,49 @@ export default function ProfilePage() {
                             </div>
                         </div>
                         
-                        {/* TRUST SCORE BREAKDOWN */}
+                        {/* TRUST SCORE BREAKDOWN (UPDATED) */}
                         {trustBreakdown && (
                             <div className="bg-[#0f0f0f] border border-white/5 p-6 rounded-[2rem]">
-                                <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-green-400">
-                                    <ShieldCheck className="w-5 h-5" /> Trust Analysis
-                                </h3>
+                                <div className="flex justify-between items-center mb-4">
+                                    <h3 className="text-lg font-bold flex items-center gap-2 text-green-400">
+                                        <ShieldCheck className="w-5 h-5" /> Trust Analysis
+                                    </h3>
+                                    <span className="text-2xl font-black text-white">{Math.min(7.0, totalTrust).toFixed(1)}<span className="text-gray-500 text-sm">/7</span></span>
+                                </div>
+                                
                                 <div className="space-y-3">
                                     <div className="flex justify-between items-center bg-black p-3 rounded-xl border border-white/10">
-                                        <span className="text-gray-400 text-sm">Base Score</span>
+                                        <span className="text-gray-400 text-sm font-bold">Base Score</span>
                                         <span className="text-green-400 font-bold">5.0</span>
                                     </div>
-                                    {trustBreakdown.details.map((detail: string, i: number) => (
-                                        <div key={i} className="flex justify-between items-center bg-black p-3 rounded-xl border border-white/10">
-                                            <span className="text-gray-300 text-sm">{detail.split(":")[0]}</span>
-                                            <span className="text-green-400 text-xs font-mono">{detail.split(":")[1]}</span>
+                                    
+                                    {/* Github Section */}
+                                    {(trustBreakdown.github > 0) && (
+                                        <div className="bg-black p-3 rounded-xl border border-white/10">
+                                            <div className="flex justify-between items-center mb-2">
+                                                <span className="text-gray-300 text-sm font-bold flex items-center gap-2"><Github className="w-3 h-3"/> GitHub</span>
+                                                <span className="text-green-400 text-xs font-mono">+{trustBreakdown.github.toFixed(1)}</span>
+                                            </div>
+                                            <div className="space-y-1 pl-5 border-l border-white/10">
+                                                {trustBreakdown.details.filter((d:string) => d.includes("GitHub")).map((d:string, i:number) => (
+                                                    <p key={i} className="text-[10px] text-gray-500">{d.replace("GitHub: ", "")}</p>
+                                                ))}
+                                            </div>
                                         </div>
-                                    ))}
-                                    <div className="pt-2 border-t border-white/10 flex justify-between text-lg font-black text-white">
-                                        <span>TOTAL</span>
-                                        <span>{(trustBreakdown.base + trustBreakdown.github + trustBreakdown.linkedin + trustBreakdown.codeforces + trustBreakdown.leetcode).toFixed(1)} / 10.0</span>
-                                    </div>
+                                    )}
+
+                                    {/* Other Platforms */}
+                                    {trustBreakdown.details.filter((d:string) => !d.includes("GitHub")).map((detail: string, i: number) => {
+                                        const parts = detail.split(":");
+                                        const platform = parts[0];
+                                        const info = parts[1] || "";
+                                        return (
+                                            <div key={i} className="flex justify-between items-center bg-black p-3 rounded-xl border border-white/10">
+                                                <span className="text-gray-300 text-sm">{platform}</span>
+                                                <span className="text-green-400 text-[10px] font-mono">{info}</span>
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                             </div>
                         )}
@@ -284,7 +308,14 @@ export default function ProfilePage() {
                                         <Linkedin className="w-5 h-5 text-gray-400"/>
                                         <span className="font-bold text-sm">LinkedIn</span>
                                     </div>
-                                    {connectedAccounts.linkedin ? <CheckCircle className="w-4 h-4 text-green-500"/> : <button onClick={() => connectPlatform('linkedin')} className="text-xs bg-white/10 px-2 py-1 rounded text-white hover:bg-white/20">Connect</button>}
+                                    <div className="flex items-center gap-2">
+                                        {connectedAccounts.linkedin ? <CheckCircle className="w-4 h-4 text-green-500"/> : <button onClick={() => connectPlatform('linkedin')} className="text-xs bg-white/10 px-2 py-1 rounded text-white hover:bg-white/20">Connect</button>}
+                                        {connectedAccounts.linkedin && (
+                                            <button onClick={() => toggleVisibility('linkedin')} className="text-gray-500 hover:text-white ml-2">
+                                                {visibility.linkedin ? <Eye className="w-3 h-3"/> : <EyeOff className="w-3 h-3"/>}
+                                            </button>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         </div>
