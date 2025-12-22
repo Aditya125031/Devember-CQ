@@ -45,6 +45,10 @@ async def update_trust_score(user: User):
     """
     breakdown = user.trust_score_breakdown
     
+    # Ensure details list exists
+    if breakdown.details is None:
+        breakdown.details = []
+
     # 1. Reset external scores in details (Keep Base & Github)
     breakdown.details = [d for d in breakdown.details if not any(p in d for p in ["Codeforces", "LeetCode", "LinkedIn"])]
     breakdown.codeforces = 0.0
@@ -180,6 +184,9 @@ async def update_profile(data: ProfileUpdate, current_user: User = Depends(get_c
     edu_text = " ".join([f"{e.course} at {e.institute}" for e in data.education if e.is_visible])
     profile_text = f"{' '.join(data.skills)} {' '.join(data.interests)} {data.about} {edu_text} {achievements_text}"
     current_user.embedding = generate_embedding(profile_text)
+    
+    # Recalculate trust score to ensure consistency (e.g. if linkedIn score was wrong)
+    await update_trust_score(current_user)
     
     await current_user.save()
     return current_user
