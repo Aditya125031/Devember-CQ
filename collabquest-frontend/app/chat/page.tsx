@@ -91,11 +91,12 @@ export default function ChatPage() {
     const remoteVideoRef = useRef<HTMLVideoElement>(null);
     const peerConnection = useRef<RTCPeerConnection | null>(null);
     const localStream = useRef<MediaStream | null>(null);
+    const screenStreamRef = useRef<MediaStream | null>(null); // NEW: Track screen stream specifically
 
     const activeChatRef = useRef<string | null>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
 
-    // Modal States (unchanged logic)
+    // Modal States
     const [showChatMenu, setShowChatMenu] = useState(false);
     const [showGroupInfo, setShowGroupInfo] = useState(false);
     const [showGroupModal, setShowGroupModal] = useState(false);
@@ -137,23 +138,24 @@ export default function ChatPage() {
             
             // --- SIGNALING EVENTS ---
             if (data.event === 'offer') {
-                if (isInCall) return; // Busy
+                if (isInCall) return; 
                 setIncomingCall({ sender_id: data.sender_id, offer: data.data.offer, callType: data.data.callType });
             } 
             else if (data.event === 'answer') {
-                if (peerConnection.current) {
+                if (peerConnection.current && peerConnection.current.signalingState !== "stable") {
                     await peerConnection.current.setRemoteDescription(new RTCSessionDescription(data.data));
                 }
             }
             else if (data.event === 'ice-candidate') {
                 if (peerConnection.current) {
-                    await peerConnection.current.addIceCandidate(new RTCIceCandidate(data.data));
+                    try {
+                        await peerConnection.current.addIceCandidate(new RTCIceCandidate(data.data));
+                    } catch(e) { }
                 }
             }
             else if (data.event === 'hang-up') {
                 endCall();
             }
-
             // --- CHAT MESSAGES ---
             else if (data.event === "message") {
                 const incomingMsg = data.message;
@@ -177,6 +179,8 @@ export default function ChatPage() {
         if (!activeChat || !ws) return;
         setIsInCall(true);
         setCallType(type);
+        setIsMuted(false);
+        setIsCameraOff(false);
 
         peerConnection.current = new RTCPeerConnection(rtcConfig);
         peerConnection.current.onicecandidate = (event) => {
@@ -201,7 +205,11 @@ export default function ChatPage() {
                 audio: true 
             });
             localStream.current = stream;
-            if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+            
+            if (localVideoRef.current) {
+                // If it's a video call, show local video. If audio, show nothing or placeholder.
+                localVideoRef.current.srcObject = type === 'video' ? stream : null;
+            }
 
             stream.getTracks().forEach(track => {
                 peerConnection.current?.addTrack(track, stream);
@@ -227,8 +235,9 @@ export default function ChatPage() {
         if (!incomingCall || !ws) return;
         setIsInCall(true);
         setCallType(incomingCall.callType);
+        setIsMuted(false);
+        setIsCameraOff(false);
         
-        // Auto-switch to chat view of caller if not already there
         if (activeChat?.id !== incomingCall.sender_id) {
             handleSelectChat(incomingCall.sender_id);
         }
@@ -258,7 +267,9 @@ export default function ChatPage() {
                 audio: true 
             });
             localStream.current = stream;
-            if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+            if (localVideoRef.current) {
+                localVideoRef.current.srcObject = incomingCall.callType === 'video' ? stream : null;
+            }
 
             stream.getTracks().forEach(track => {
                 peerConnection.current?.addTrack(track, stream);
@@ -273,7 +284,7 @@ export default function ChatPage() {
                 data: answer
             }));
             
-            setIncomingCall(null); // Close modal
+            setIncomingCall(null);
 
         } catch (err) {
             console.error(err);
@@ -282,18 +293,30 @@ export default function ChatPage() {
     };
 
     const endCall = () => {
+        // 1. Stop Local Camera/Mic Stream
         if (localStream.current) {
             localStream.current.getTracks().forEach(track => track.stop());
         }
+        // 2. Stop Screen Share Stream (This is the fix for "resources not released")
+        if (screenStreamRef.current) {
+            screenStreamRef.current.getTracks().forEach(track => track.stop());
+        }
+        
+        // 3. Close Peer Connection
         if (peerConnection.current) {
             peerConnection.current.close();
         }
+        
+        // 4. Send Hangup Signal
         if (ws && activeChat && isInCall) {
             ws.send(JSON.stringify({ event: 'hang-up', recipient_id: activeChat.id }));
         }
         
+        // 5. Reset Refs & State
         peerConnection.current = null;
         localStream.current = null;
+        screenStreamRef.current = null;
+        
         setIsInCall(false);
         setIncomingCall(null);
         setIsScreenSharing(false);
@@ -305,88 +328,86 @@ export default function ChatPage() {
         if (!peerConnection.current || !localStream.current) return;
 
         if (isScreenSharing) {
-            // Stop Screen Share
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-            const videoTrack = stream.getVideoTracks()[0];
-            
-            const sender = peerConnection.current.getSenders().find(s => s.track?.kind === 'video');
-            if (sender) sender.replaceTrack(videoTrack);
-            
-            if (localVideoRef.current) localVideoRef.current.srcObject = stream;
-            localStream.current = stream;
-            setIsScreenSharing(false);
+            // --- STOP SCREEN SHARE ---
+            try {
+                // Stop screen share tracks
+                if (screenStreamRef.current) {
+                    screenStreamRef.current.getTracks().forEach(track => track.stop());
+                    screenStreamRef.current = null;
+                }
+
+                // Restore Camera Video (Get a new stream for the camera)
+                // Note: We only need video here, we keep the original audio track if possible
+                // BUT, to keep it simple and ensure sync, we often re-get both. 
+                // To avoid unmuting the user, we must check isMuted.
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                const videoTrack = stream.getVideoTracks()[0];
+                const audioTrack = stream.getAudioTracks()[0];
+                
+                // Apply current mute state to new tracks
+                audioTrack.enabled = !isMuted;
+                videoTrack.enabled = !isCameraOff; // Should match camera off state
+
+                // Replace sender track
+                const videoSender = peerConnection.current.getSenders().find(s => s.track?.kind === 'video');
+                if (videoSender) videoSender.replaceTrack(videoTrack);
+                
+                // We might also want to update the audio track if we re-acquired it
+                const audioSender = peerConnection.current.getSenders().find(s => s.track?.kind === 'audio');
+                if (audioSender) audioSender.replaceTrack(audioTrack);
+
+                // Update Local View
+                localStream.current = stream; // Update ref to new stream
+                if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+                
+                setIsScreenSharing(false);
+            } catch(e) { console.error("Error reverting to camera", e); }
         } else {
-            // Start Screen Share
+            // --- START SCREEN SHARE ---
             try {
                 const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
                 const screenTrack = stream.getVideoTracks()[0];
+                
+                screenStreamRef.current = stream; // Track it so we can stop it later
 
                 const sender = peerConnection.current.getSenders().find(s => s.track?.kind === 'video');
                 if (sender) sender.replaceTrack(screenTrack);
                 
-                screenTrack.onended = () => toggleScreenShare(); // Handle browser "Stop Sharing" button
+                screenTrack.onended = () => toggleScreenShare(); // Handle browser "Stop Sharing" UI
                 
                 if (localVideoRef.current) localVideoRef.current.srcObject = stream;
                 setIsScreenSharing(true);
-            } catch (err) {
-                console.error("Screen share cancelled");
+            } catch (err: any) {
+                if (err.name === 'NotAllowedError') {
+                    // User cancelled
+                } else {
+                    console.error("Screen share error:", err);
+                }
             }
         }
     };
 
     const toggleMute = () => {
+        // Toggle 'enabled' on all audio tracks in the current local stream
         if (localStream.current) {
-            localStream.current.getAudioTracks().forEach(t => t.enabled = !t.enabled);
+            const tracks = localStream.current.getAudioTracks();
+            tracks.forEach(t => t.enabled = !isMuted); // If isMuted is true, we want enabled=true (unmute)
             setIsMuted(!isMuted);
         }
     };
 
     const toggleCamera = () => {
         if (localStream.current) {
-            localStream.current.getVideoTracks().forEach(t => t.enabled = !t.enabled);
+            const tracks = localStream.current.getVideoTracks();
+            tracks.forEach(t => t.enabled = !isCameraOff);
             setIsCameraOff(!isCameraOff);
         }
     };
 
-    // --- EXISTING CHAT LOGIC ---
-    const fetchChatList = async () => {
-        try {
-            const res = await api.get("/chat/conversations");
-            const mapped = res.data.map((c: any) => ({
-                id: c.id, name: c.username || "Unknown", type: c.type, avatar: c.avatar_url || "https://github.com/shadcn.png",
-                last_message: c.last_message || "", timestamp: c.last_timestamp, unread_count: c.unread_count || 0,
-                is_online: c.is_online, member_count: c.member_count, is_team_group: c.is_team_group, admin_id: c.admin_id 
-            }));
-            setChatList(mapped);
-        } catch (e) { }
-    };
-
-    const handleSelectChat = async (targetId: string) => {
-        try {
-            let chat = chatList.find(c => c.id === targetId);
-            let isUser = false;
-            if (!chat) {
-                try {
-                    const uRes = await api.get(`/users/${targetId}`);
-                    if (uRes.data) { chat = { id: targetId, name: uRes.data.username || "User", type: "user", avatar: uRes.data.avatar_url || "https://github.com/shadcn.png", last_message: "", timestamp: "", unread_count: 0, is_online: false }; isUser = true; }
-                } catch {
-                    try { const gRes = await api.get(`/chat/groups/${targetId}`); chat = { id: targetId, name: gRes.data.name || "Group", type: "group", avatar: gRes.data.avatar_url || "https://api.dicebear.com/7.x/initials/svg?seed=Group", last_message: "", timestamp: "", unread_count: 0, is_online: true, admin_id: gRes.data.admin_id }; isUser = false; } catch { return; }
-                }
-            } else { isUser = chat.type === 'user'; }
-            setActiveChat(chat!); setShowGroupInfo(false); setShowProfileInfo(false); setShowChatMenu(false); setPendingAttachments([]);
-            if (isUser) { api.get(`/users/${targetId}`).then(res => setActiveUserProfile(res.data)).catch(() => { }); } 
-            else { setChatStatus("accepted"); api.get(`/chat/groups/${targetId}`).then(res => setGroupMembers(res.data.members)).catch(() => { }); }
-            api.get(`/chat/history/${targetId}`).then(res => { setMessages(res.data.messages || []); if (res.data.meta) { if (res.data.meta.blocked_by_me) setChatStatus("blocked_by_me"); else if (res.data.meta.blocked_by_them) setChatStatus("blocked_by_them"); else if (res.data.meta.is_pending) setChatStatus("pending_incoming"); else setChatStatus("accepted"); } fetchChatList(); window.dispatchEvent(new Event("triggerNotificationRefresh")); });
-        } catch (e) { }
-    };
-
-    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (!e.target.files || e.target.files.length === 0) return;
-        setIsUploading(true);
-        const formData = new FormData();
-        formData.append("file", e.target.files[0]);
-        try { const res = await api.post("/chat/upload", formData, { headers: { "Content-Type": "multipart/form-data" } }); setPendingAttachments(prev => [...prev, res.data]); } catch (err) { alert("Upload failed"); } finally { setIsUploading(false); if (fileInputRef.current) fileInputRef.current.value = ""; }
-    };
+    // --- EXISTING CHAT LOGIC (Unchanged) ---
+    const fetchChatList = async () => { try { const res = await api.get("/chat/conversations"); const mapped = res.data.map((c: any) => ({ id: c.id, name: c.username || "Unknown", type: c.type, avatar: c.avatar_url || "https://github.com/shadcn.png", last_message: c.last_message || "", timestamp: c.last_timestamp, unread_count: c.unread_count || 0, is_online: c.is_online, member_count: c.member_count, is_team_group: c.is_team_group, admin_id: c.admin_id })); setChatList(mapped); } catch (e) { } };
+    const handleSelectChat = async (targetId: string) => { try { let chat = chatList.find(c => c.id === targetId); let isUser = false; if (!chat) { try { const uRes = await api.get(`/users/${targetId}`); if (uRes.data) { chat = { id: targetId, name: uRes.data.username || "User", type: "user", avatar: uRes.data.avatar_url || "https://github.com/shadcn.png", last_message: "", timestamp: "", unread_count: 0, is_online: false }; isUser = true; } } catch { try { const gRes = await api.get(`/chat/groups/${targetId}`); chat = { id: targetId, name: gRes.data.name || "Group", type: "group", avatar: gRes.data.avatar_url || "https://api.dicebear.com/7.x/initials/svg?seed=Group", last_message: "", timestamp: "", unread_count: 0, is_online: true, admin_id: gRes.data.admin_id }; isUser = false; } catch { return; } } } else { isUser = chat.type === 'user'; } setActiveChat(chat!); setShowGroupInfo(false); setShowProfileInfo(false); setShowChatMenu(false); setPendingAttachments([]); if (isUser) { api.get(`/users/${targetId}`).then(res => setActiveUserProfile(res.data)).catch(() => { }); } else { setChatStatus("accepted"); api.get(`/chat/groups/${targetId}`).then(res => setGroupMembers(res.data.members)).catch(() => { }); } api.get(`/chat/history/${targetId}`).then(res => { setMessages(res.data.messages || []); if (res.data.meta) { if (res.data.meta.blocked_by_me) setChatStatus("blocked_by_me"); else if (res.data.meta.blocked_by_them) setChatStatus("blocked_by_them"); else if (res.data.meta.is_pending) setChatStatus("pending_incoming"); else setChatStatus("accepted"); } fetchChatList(); window.dispatchEvent(new Event("triggerNotificationRefresh")); }); } catch (e) { } };
+    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => { if (!e.target.files || e.target.files.length === 0) return; setIsUploading(true); const formData = new FormData(); formData.append("file", e.target.files[0]); try { const res = await api.post("/chat/upload", formData, { headers: { "Content-Type": "multipart/form-data" } }); setPendingAttachments(prev => [...prev, res.data]); } catch (err) { alert("Upload failed"); } finally { setIsUploading(false); if (fileInputRef.current) fileInputRef.current.value = ""; } };
     const removeAttachment = (index: number) => { setPendingAttachments(prev => prev.filter((_, i) => i !== index)); };
     const sendMessage = () => { if (!ws || !activeChat) return; if (!newMessage.trim() && pendingAttachments.length === 0) return; const msgPayload = { recipient_id: activeChat.id, content: newMessage, attachments: pendingAttachments }; ws.send(JSON.stringify(msgPayload)); setMessages(prev => [...prev, { sender_id: userId, content: newMessage, timestamp: new Date().toISOString(), attachments: pendingAttachments }]); setNewMessage(""); setPendingAttachments([]); if (chatStatus === 'none' && activeChat.type === 'user') setChatStatus('pending_outgoing'); };
     const handleAction = async (action: 'accept' | 'block' | 'unblock') => { if (!activeChat) return; try { if (action === 'accept') { await api.post(`/chat/request/${activeChat.id}/accept`, {}); setChatStatus('accepted'); } else { await api.post(`/chat/${action}/${activeChat.id}`, {}); setChatStatus(action === 'block' ? 'blocked_by_me' : 'accepted'); } setShowChatMenu(false); } catch (e) { alert("Action failed"); } };
@@ -422,38 +443,53 @@ export default function ChatPage() {
 
                         {/* Video Container */}
                         <div className="relative w-full h-full flex items-center justify-center p-4">
-                            {/* Remote Video (Full Screen) */}
-                            <video 
-                                ref={remoteVideoRef} 
-                                autoPlay 
-                                playsInline 
-                                className="w-full h-full object-contain rounded-2xl bg-gray-900" 
-                            />
+                            {/* Remote Video */}
+                            {/* If audio call, show placeholder avatar/icon instead of black video */}
+                            {callType === 'video' ? (
+                                <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-contain rounded-2xl bg-gray-900" />
+                            ) : (
+                                <div className="flex flex-col items-center justify-center">
+                                    <div className="w-32 h-32 rounded-full bg-gray-800 flex items-center justify-center animate-pulse border-4 border-green-500/30">
+                                        <User className="w-16 h-16 text-gray-400" />
+                                    </div>
+                                    <p className="mt-4 text-xl font-bold">{activeChat?.name}</p>
+                                    <p className="text-green-500 text-sm">Voice Connected</p>
+                                    {/* Hidden Audio Element for Remote Stream */}
+                                    <video ref={remoteVideoRef} autoPlay playsInline className="hidden" />
+                                </div>
+                            )}
                             
-                            {/* Local Video (PiP) */}
-                            <div className="absolute bottom-24 right-8 w-48 h-36 bg-gray-800 rounded-xl overflow-hidden shadow-2xl border-2 border-gray-700">
-                                <video 
-                                    ref={localVideoRef} 
-                                    autoPlay 
-                                    playsInline 
-                                    muted 
-                                    className={`w-full h-full object-cover ${isCameraOff ? 'hidden' : ''}`} 
-                                />
-                                {isCameraOff && <div className="flex items-center justify-center h-full text-gray-500"><VideoOff className="w-8 h-8"/></div>}
-                            </div>
+                            {/* Local Video (PiP) - Only for Video Calls */}
+                            {callType === 'video' && (
+                                <div className="absolute bottom-24 right-8 w-48 h-36 bg-gray-800 rounded-xl overflow-hidden shadow-2xl border-2 border-gray-700">
+                                    <video ref={localVideoRef} autoPlay playsInline muted className={`w-full h-full object-cover ${isCameraOff ? 'hidden' : ''}`} />
+                                    {isCameraOff && <div className="flex items-center justify-center h-full text-gray-500"><VideoOff className="w-8 h-8"/></div>}
+                                </div>
+                            )}
                         </div>
 
                         {/* Controls */}
                         <div className="absolute bottom-8 flex gap-4 bg-gray-900/80 p-4 rounded-full backdrop-blur-md border border-gray-800">
+                            {/* Mute Button */}
                             <button onClick={toggleMute} className={`p-4 rounded-full transition ${isMuted ? 'bg-red-500 hover:bg-red-600' : 'bg-gray-700 hover:bg-gray-600'}`}>
                                 {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
                             </button>
-                            <button onClick={toggleCamera} className={`p-4 rounded-full transition ${isCameraOff ? 'bg-red-500 hover:bg-red-600' : 'bg-gray-700 hover:bg-gray-600'}`}>
-                                {isCameraOff ? <VideoOff className="w-6 h-6" /> : <Video className="w-6 h-6" />}
-                            </button>
-                            <button onClick={toggleScreenShare} className={`p-4 rounded-full transition ${isScreenSharing ? 'bg-green-500 hover:bg-green-600 text-black' : 'bg-gray-700 hover:bg-gray-600'}`}>
-                                {isScreenSharing ? <Monitor className="w-6 h-6" /> : <MonitorOff className="w-6 h-6" />}
-                            </button>
+
+                            {/* Camera Toggle (Video Call Only) */}
+                            {callType === 'video' && (
+                                <button onClick={toggleCamera} className={`p-4 rounded-full transition ${isCameraOff ? 'bg-red-500 hover:bg-red-600' : 'bg-gray-700 hover:bg-gray-600'}`}>
+                                    {isCameraOff ? <VideoOff className="w-6 h-6" /> : <Video className="w-6 h-6" />}
+                                </button>
+                            )}
+
+                            {/* Screen Share (Video Call Only) */}
+                            {callType === 'video' && (
+                                <button onClick={toggleScreenShare} className={`p-4 rounded-full transition ${isScreenSharing ? 'bg-green-500 hover:bg-green-600 text-black' : 'bg-gray-700 hover:bg-gray-600'}`}>
+                                    {isScreenSharing ? <Monitor className="w-6 h-6" /> : <MonitorOff className="w-6 h-6" />}
+                                </button>
+                            )}
+
+                            {/* End Call */}
                             <button onClick={endCall} className="p-4 rounded-full bg-red-600 hover:bg-red-700 transition">
                                 <PhoneOff className="w-6 h-6 fill-current" />
                             </button>
@@ -504,8 +540,6 @@ export default function ChatPage() {
                                     <img src={activeChat.avatar || "https://github.com/shadcn.png"} className="w-10 h-10 rounded-full" />
                                     <div><h3 className="font-bold flex items-center gap-2">{activeChat.name || "Unknown"}{activeChat.type === "group" && activeChat.is_team_group && <span className="text-yellow-500"><ShieldAlert className="w-3 h-3 inline" /></span>}</h3><span className="text-xs text-gray-400 flex items-center gap-1">{activeChat.type === 'group' ? <><Users className="w-3 h-3" /> {groupMembers.length} members</> : "View Profile"}</span></div>
                                 </div>
-                                
-                                {/* CALL BUTTONS */}
                                 <div className="flex items-center gap-2">
                                     <button onClick={() => startCall('audio')} className="p-2 hover:bg-gray-800 rounded-full text-gray-400 hover:text-green-400 transition" title="Voice Call">
                                         <Phone className="w-5 h-5" />
@@ -568,7 +602,6 @@ export default function ChatPage() {
                                 )}
                             </div>
                             
-                            {/* ... [Modals remain unchanged] ... */}
                             <AnimatePresence>
                                 {showGroupInfo && activeChat.type === 'group' && (<motion.div initial={{ x: 300 }} animate={{ x: 0 }} exit={{ x: 300 }} className="absolute top-0 right-0 h-full w-72 bg-gray-900 border-l border-gray-800 z-30 p-4 shadow-2xl overflow-y-auto custom-scrollbar"><div className="flex justify-between items-center mb-6"><h3 className="font-bold">Team Members</h3><button onClick={() => setShowGroupInfo(false)}><X className="w-4 h-4 text-gray-500 hover:text-white" /></button></div><div className="space-y-3">{groupMembers.map(m => (<div key={m.id} onClick={() => { if (m.id !== userId) handleSelectChat(m.id); }} className={`flex items-center gap-3 p-2 rounded-lg ${m.id !== userId ? 'hover:bg-gray-800 cursor-pointer' : 'opacity-50'}`}><img src={m.avatar_url || "https://github.com/shadcn.png"} className="w-8 h-8 rounded-full" /><span className="text-sm font-medium">{m.username} {m.id === userId && "(You)"}</span>{m.id === activeChat.admin_id && <span className="text-[10px] text-yellow-500 ml-2 font-mono">ADMIN</span>}</div>))}</div></motion.div>)}
                             </AnimatePresence>
