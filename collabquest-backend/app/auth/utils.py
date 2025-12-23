@@ -61,7 +61,7 @@ async def update_trust_score(user):
     breakdown.codeforces = 0.0
     breakdown.leetcode = 0.0
 
-    # 2. GitHub Boost (Max 1.5)
+    # 2. GitHub Boost (Max 1.0)
     github_stats = user.platform_stats.get("github")
     if github_stats:
         public_repos = github_stats.get("public_repos", 0)
@@ -76,9 +76,9 @@ async def update_trust_score(user):
                 age_years = (datetime.now() - created_at).days / 365
             except: pass
 
-        repo_pts = min(0.5, public_repos * 0.02)
-        follow_pts = min(0.5, followers * 0.05)
-        age_pts = min(0.5, age_years * 0.2)
+        repo_pts = min(0.3, public_repos * 0.01)
+        follow_pts = min(0.3, followers * 0.02)
+        age_pts = min(0.4, age_years * 0.05)
         
         breakdown.github = round(repo_pts + follow_pts + age_pts, 1)
         breakdown.details.append(f"GitHub: {public_repos} Repos, {followers} Followers (+{breakdown.github})")
@@ -113,13 +113,14 @@ async def update_trust_score(user):
             breakdown.leetcode = points
             breakdown.details.append(f"LeetCode: {total_solved} Solved (+{points})")
 
-    # Modified Step 4
-    linkedin_connected = user.connected_accounts.get("linkedin")
+    # Linkedin (Max 0.1)
+    linkedin_connected = getattr(user.connected_accounts, "linkedin", None)
+    # Check if they have the link in their professional links list too
     linkedin_in_links = any("linkedin.com" in str(link.url) for link in user.professional_links)
 
     if linkedin_connected or linkedin_in_links:
         breakdown.linkedin = 0.1
-        breakdown.details.append("LinkedIn: Verified or Linked (+0.1)")
+    breakdown.details.append("LinkedIn: Connected (+0.1)")
 
     # 6. Final Summation
     total = (
