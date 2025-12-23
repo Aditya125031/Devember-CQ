@@ -91,7 +91,7 @@ export default function ChatPage() {
     const remoteVideoRef = useRef<HTMLVideoElement>(null);
     const peerConnection = useRef<RTCPeerConnection | null>(null);
     const localStream = useRef<MediaStream | null>(null);
-    const screenStreamRef = useRef<MediaStream | null>(null); // NEW: Track screen stream specifically
+    const screenStreamRef = useRef<MediaStream | null>(null); // Track screen stream separately
 
     const activeChatRef = useRef<string | null>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -156,6 +156,7 @@ export default function ChatPage() {
             else if (data.event === 'hang-up') {
                 endCall();
             }
+
             // --- CHAT MESSAGES ---
             else if (data.event === "message") {
                 const incomingMsg = data.message;
@@ -207,7 +208,6 @@ export default function ChatPage() {
             localStream.current = stream;
             
             if (localVideoRef.current) {
-                // If it's a video call, show local video. If audio, show nothing or placeholder.
                 localVideoRef.current.srcObject = type === 'video' ? stream : null;
             }
 
@@ -297,7 +297,7 @@ export default function ChatPage() {
         if (localStream.current) {
             localStream.current.getTracks().forEach(track => track.stop());
         }
-        // 2. Stop Screen Share Stream (This is the fix for "resources not released")
+        // 2. Stop Screen Share Stream
         if (screenStreamRef.current) {
             screenStreamRef.current.getTracks().forEach(track => track.stop());
         }
@@ -336,28 +336,25 @@ export default function ChatPage() {
                     screenStreamRef.current = null;
                 }
 
-                // Restore Camera Video (Get a new stream for the camera)
-                // Note: We only need video here, we keep the original audio track if possible
-                // BUT, to keep it simple and ensure sync, we often re-get both. 
-                // To avoid unmuting the user, we must check isMuted.
+                // Restore Camera Video 
                 const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
                 const videoTrack = stream.getVideoTracks()[0];
                 const audioTrack = stream.getAudioTracks()[0];
                 
                 // Apply current mute state to new tracks
+                // If isMuted is TRUE, enabled should be FALSE.
                 audioTrack.enabled = !isMuted;
-                videoTrack.enabled = !isCameraOff; // Should match camera off state
+                videoTrack.enabled = !isCameraOff; 
 
                 // Replace sender track
                 const videoSender = peerConnection.current.getSenders().find(s => s.track?.kind === 'video');
                 if (videoSender) videoSender.replaceTrack(videoTrack);
                 
-                // We might also want to update the audio track if we re-acquired it
                 const audioSender = peerConnection.current.getSenders().find(s => s.track?.kind === 'audio');
                 if (audioSender) audioSender.replaceTrack(audioTrack);
 
                 // Update Local View
-                localStream.current = stream; // Update ref to new stream
+                localStream.current = stream; 
                 if (localVideoRef.current) localVideoRef.current.srcObject = stream;
                 
                 setIsScreenSharing(false);
@@ -368,18 +365,18 @@ export default function ChatPage() {
                 const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
                 const screenTrack = stream.getVideoTracks()[0];
                 
-                screenStreamRef.current = stream; // Track it so we can stop it later
+                screenStreamRef.current = stream; 
 
                 const sender = peerConnection.current.getSenders().find(s => s.track?.kind === 'video');
                 if (sender) sender.replaceTrack(screenTrack);
                 
-                screenTrack.onended = () => toggleScreenShare(); // Handle browser "Stop Sharing" UI
+                screenTrack.onended = () => toggleScreenShare(); 
                 
                 if (localVideoRef.current) localVideoRef.current.srcObject = stream;
                 setIsScreenSharing(true);
             } catch (err: any) {
                 if (err.name === 'NotAllowedError') {
-                    // User cancelled
+                    console.log("Screen share cancelled by user.");
                 } else {
                     console.error("Screen share error:", err);
                 }
@@ -388,23 +385,25 @@ export default function ChatPage() {
     };
 
     const toggleMute = () => {
-        // Toggle 'enabled' on all audio tracks in the current local stream
         if (localStream.current) {
+            const newMutedState = !isMuted;
             const tracks = localStream.current.getAudioTracks();
-            tracks.forEach(t => t.enabled = !isMuted); // If isMuted is true, we want enabled=true (unmute)
-            setIsMuted(!isMuted);
+            // If new state is muted (true), enabled should be false.
+            tracks.forEach(t => t.enabled = !newMutedState);
+            setIsMuted(newMutedState);
         }
     };
 
     const toggleCamera = () => {
         if (localStream.current) {
+            const newCameraOffState = !isCameraOff;
             const tracks = localStream.current.getVideoTracks();
-            tracks.forEach(t => t.enabled = !isCameraOff);
-            setIsCameraOff(!isCameraOff);
+            tracks.forEach(t => t.enabled = !newCameraOffState);
+            setIsCameraOff(newCameraOffState);
         }
     };
 
-    // --- EXISTING CHAT LOGIC (Unchanged) ---
+    // --- EXISTING CHAT LOGIC ---
     const fetchChatList = async () => { try { const res = await api.get("/chat/conversations"); const mapped = res.data.map((c: any) => ({ id: c.id, name: c.username || "Unknown", type: c.type, avatar: c.avatar_url || "https://github.com/shadcn.png", last_message: c.last_message || "", timestamp: c.last_timestamp, unread_count: c.unread_count || 0, is_online: c.is_online, member_count: c.member_count, is_team_group: c.is_team_group, admin_id: c.admin_id })); setChatList(mapped); } catch (e) { } };
     const handleSelectChat = async (targetId: string) => { try { let chat = chatList.find(c => c.id === targetId); let isUser = false; if (!chat) { try { const uRes = await api.get(`/users/${targetId}`); if (uRes.data) { chat = { id: targetId, name: uRes.data.username || "User", type: "user", avatar: uRes.data.avatar_url || "https://github.com/shadcn.png", last_message: "", timestamp: "", unread_count: 0, is_online: false }; isUser = true; } } catch { try { const gRes = await api.get(`/chat/groups/${targetId}`); chat = { id: targetId, name: gRes.data.name || "Group", type: "group", avatar: gRes.data.avatar_url || "https://api.dicebear.com/7.x/initials/svg?seed=Group", last_message: "", timestamp: "", unread_count: 0, is_online: true, admin_id: gRes.data.admin_id }; isUser = false; } catch { return; } } } else { isUser = chat.type === 'user'; } setActiveChat(chat!); setShowGroupInfo(false); setShowProfileInfo(false); setShowChatMenu(false); setPendingAttachments([]); if (isUser) { api.get(`/users/${targetId}`).then(res => setActiveUserProfile(res.data)).catch(() => { }); } else { setChatStatus("accepted"); api.get(`/chat/groups/${targetId}`).then(res => setGroupMembers(res.data.members)).catch(() => { }); } api.get(`/chat/history/${targetId}`).then(res => { setMessages(res.data.messages || []); if (res.data.meta) { if (res.data.meta.blocked_by_me) setChatStatus("blocked_by_me"); else if (res.data.meta.blocked_by_them) setChatStatus("blocked_by_them"); else if (res.data.meta.is_pending) setChatStatus("pending_incoming"); else setChatStatus("accepted"); } fetchChatList(); window.dispatchEvent(new Event("triggerNotificationRefresh")); }); } catch (e) { } };
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => { if (!e.target.files || e.target.files.length === 0) return; setIsUploading(true); const formData = new FormData(); formData.append("file", e.target.files[0]); try { const res = await api.post("/chat/upload", formData, { headers: { "Content-Type": "multipart/form-data" } }); setPendingAttachments(prev => [...prev, res.data]); } catch (err) { alert("Upload failed"); } finally { setIsUploading(false); if (fileInputRef.current) fileInputRef.current.value = ""; } };
@@ -497,8 +496,8 @@ export default function ChatPage() {
                     </motion.div>
                 )}
             </AnimatePresence>
-
-            {/* --- INCOMING CALL MODAL --- */}
+            
+            {/* INCOMING CALL & CHAT LAYOUT REMAINS SAME */}
             <AnimatePresence>
                 {incomingCall && !isInCall && (
                     <motion.div initial={{ y: -100 }} animate={{ y: 0 }} exit={{ y: -100 }} className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] bg-gray-900 border border-purple-500/50 p-6 rounded-2xl shadow-2xl flex items-center gap-6 min-w-[320px]">
@@ -519,8 +518,7 @@ export default function ChatPage() {
                     </motion.div>
                 )}
             </AnimatePresence>
-
-            {/* --- MAIN CHAT LAYOUT --- */}
+            {/* ... Rest of the chat layout ... */}
             <div className="flex-1 max-w-6xl w-full mx-auto p-4 flex gap-4 h-[calc(100vh-80px)] overflow-hidden">
                 <div className="w-full md:w-1/3 bg-gray-900 border border-gray-800 rounded-2xl flex flex-col overflow-hidden h-full shadow-lg">
                     <div className="p-4 border-b border-gray-800 bg-gray-900 shrink-0">
