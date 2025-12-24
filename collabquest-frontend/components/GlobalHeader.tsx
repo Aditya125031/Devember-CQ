@@ -4,7 +4,7 @@ import Cookies from "js-cookie";
 import api from "@/lib/api";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-    ShieldCheck, Bell, MessageSquare, Check, X, Loader2, AlertTriangle, LogOut, User as UserIcon
+    ShieldCheck, Bell, MessageSquare, Check, X, Loader2, AlertTriangle, LogOut, User as UserIcon, Settings
 } from "lucide-react";
 import Link from "next/link";
 
@@ -281,6 +281,14 @@ export default function GlobalHeader() {
                                     </div>
                                     <div className="p-2">
                                         <Link href="/profile" onClick={() => setShowProfileDropdown(false)}><div className="p-3 hover:bg-gray-800 rounded-lg cursor-pointer flex items-center gap-3 text-sm text-gray-300 hover:text-white transition mb-1"><UserIcon className="w-4 h-4 text-blue-400" /> My Profile</div></Link>
+                                        
+                                        {/* ADDED SETTINGS LINK */}
+                                        <Link href="/settings" onClick={() => setShowProfileDropdown(false)}>
+                                            <div className="p-3 hover:bg-gray-800 rounded-lg cursor-pointer flex items-center gap-3 text-sm text-gray-300 hover:text-white transition mb-1">
+                                                <Settings className="w-4 h-4 text-purple-400" /> Settings
+                                            </div>
+                                        </Link>
+
                                         <button onClick={handleLogout} className="w-full text-left p-3 hover:bg-red-900/20 rounded-lg cursor-pointer flex items-center gap-3 text-sm text-red-400 hover:text-red-300 transition"><LogOut className="w-4 h-4" /> Logout</button>
                                     </div>
                                 </motion.div>
