@@ -31,7 +31,6 @@ collabquest-frontend/yarn-debug.log*
 collabquest-frontend/yarn-error.log*
 
 __pycache__/
-uploads/
 *.pyc
 
 # Add these lines to your .gitignore file
