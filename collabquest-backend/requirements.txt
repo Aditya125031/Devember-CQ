@@ -17,6 +17,7 @@ email-validator
 # --- NEW AI STACK (OpenRouter / RAG) ---
 openai
 langchain
+langgraph
 langchain-community
 langchain-openai
 langchain-huggingface

@@ -68,7 +68,9 @@ async def get_chat_history(current_user: User = Depends(get_current_user)):
     try:
         messages = await ChatMessage.find(
             ChatMessage.user_id == str(current_user.id)
-        ).sort("+timestamp").limit(25).to_list()
+        ).sort("-timestamp").limit(25).to_list()
+
+        messages.reverse()
 
         history = [
             {

@@ -1,187 +1,176 @@
 import os
 import asyncio
 import json
+from typing import TypedDict, Literal
+
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
-from app.models import ChatMessage, Team, User
-# --- CRITICAL IMPORT: The new Team Matcher ---
+from langchain_core.prompts import ChatPromptTemplate
+from langgraph.graph import StateGraph, END
+
+from app.models import ChatMessage, Team
 from app.services.recommendation_service import search_vectors
 
 load_dotenv()
 
-# 1. SETUP OPENROUTER CLIENT
+# --- CONFIGURATION ---
 client = AsyncOpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=os.getenv("OPENROUTER_API_KEY"),
 )
 
-# 2. DEFINE MODELS
-MENTOR_MODEL = "meta-llama/llama-3.3-70b-instruct:free" 
-CODER_MODEL = "xiaomi/mimo-v2-flash:free"     
+# Models
+ROUTER_MODEL = "arcee-ai/trinity-mini:free"
+CODER_MODEL = "xiaomi/mimo-v2-flash:free"
+MENTOR_MODEL = "allenai/olmo-3.1-32b-think:free" 
 
-async def create_ai_project(user_idea: str, user_id:str):
-    """
-    Uses AI to expand a vague idea into a full project structure
-    and saves it to the database.
-    """
+# --- 1. DEFINE THE STATE (The Memory of the Graph) ---
+class AgentState(TypedDict):
+    question: str
+    user_id: str
+    user_skills: list[str]
+    intent: str
+    final_response: str
 
+# --- 2. DEFINE THE NODES (The Agents) ---
+
+# app/services/chatbot_services.py
+
+# ... existing imports ...
+
+# REPLACE the router_node function with this:
+async def router_node(state: AgentState):
+    """Decides which path to take."""
+    print(f"🧠 Routing: {state['question'][:30]}...")
+    
+    # 🔥 FIX: Use a simple string instead of ChatPromptTemplate
+    router_prompt = """You are a Router. Classify the user input into EXACTLY ONE category:
+    - CREATE_PROJECT (User wants to start/post a project)
+    - CODE_REQUEST (User asks for code/debugging)
+    - SEARCH_REQUEST (User wants to find/join teams)
+    - GENERAL_QUERY (Greetings, platform questions)
+    
+    User Input: {question}
+    
+    Respond with ONLY the category name."""
+    
+    # 🔥 FIX: Synchronous standard python formatting
+    chain_input = router_prompt.format(question=state["question"])
+    
+    try:
+        completion = await client.chat.completions.create(
+            model=ROUTER_MODEL,
+            messages=[{"role": "user", "content": chain_input}],
+            temperature=0.0
+        )
+        intent = completion.choices[0].message.content.strip().upper()
+    except:
+        intent = "GENERAL_QUERY"
+        
+    # Safety Check
+    if intent not in ["CREATE_PROJECT", "CODE_REQUEST", "SEARCH_REQUEST", "GENERAL_QUERY"]:
+        intent = "GENERAL_QUERY"
+        
+    return {"intent": intent}
+
+async def planner_node(state: AgentState):
+    """Handles Project Creation Logic."""
+    print("🚀 Planner Node Active")
+    
     system_prompt = """
-    You are an expert Technical Project Manager.
-    
-    Your Task: Convert the user's rough idea into a concrete Project Plan.
-    
-    CRITICAL LOGIC FOR TECH STACK:
-    1. If the user specifies technologies (e.g., "using Rust"), you MUST use them.
-    2. If the user DOES NOT specify technologies, you MUST INFER the best modern stack.
-       - Example: "Make a game" -> You add ["Unity", "C#", "Blender"]
-       - Example: "Make a data dashboard" -> You add ["Python", "Streamlit", "Pandas"]
-    
-    Output format must be strictly JSON (no markdown, no extra text):
-    {
-        "name": "A Creative & Catchy Project Title",
-        "description": "A professional, exciting 2-sentence summary of what the project does.",
-        "needed_skills": ["Tech1", "Tech2", "Framework", "Concept"],
-        "roadmap": ["Phase 1: Setup & Design", "Phase 2: MVP Development", "Phase 3: Testing & Launch"]
-    }
+    You are a Technical Project Manager.
+    Convert the idea: "{idea}" into a JSON Project Plan.
+    JSON Format: {{ "name": "...", "description": "...", "needed_skills": ["..."], "roadmap": ["..."] }}
     """
-
+    
     try:
         completion = await client.chat.completions.create(
             model=MENTOR_MODEL,
-            messages=[
-                {"role":"system", "content": system_prompt},
-                {"role":"user", "content": f"Create a project for: {user_idea}"}
-            ]
+            messages=[{"role": "user", "content": system_prompt.format(idea=state["question"])}]
         )
+        raw_text = completion.choices[0].message.content
+        clean_json = raw_text.replace("```json", "").replace("```", "").strip()
+        data = json.loads(clean_json)
         
-        ai_response = completion.choices[0].message.content
-        
-        clean_json = ai_response.replace("```json", "").replace("```", "").strip()
-        project_data = json.loads(clean_json)
-
+        # Database Action
         new_team = Team(
-            name=project_data["name"],
-            description=project_data["description"],
-            leader_id=user_id,  # Assign the current user as Leader
-            needed_skills=project_data["needed_skills"], # AI-generated skills
-            members=[user_id],  # Add leader as first member
-            roadmap=project_data.get("roadmap", []) 
+            name=data["name"],
+            description=data["description"],
+            leader_id=state["user_id"],
+            needed_skills=data["needed_skills"],
+            members=[state["user_id"]],
+            roadmap=data.get("roadmap", [])
         )
         await new_team.insert()
         
-        return f"✅ Success! I've created the project **'{project_data['name']}'** for you.\n\n**Description:** {project_data['description']}\n**Tech Stack:** {', '.join(project_data['needed_skills'])}\n\nYou can view and edit it in the Dashboard!"
-
+        response = f"✅ Created **{data['name']}**!\nStack: {', '.join(data['needed_skills'])}"
     except Exception as e:
-        print(f"Project Creation Error: {e}")
-        return "I tried to create the project, but I ran into a database error. Please try posting it manually on the Marketplace."
-
-async def generate_chat_reply(question: str, user_skills: list[str], user_id: str) -> str:
-    """
-        The Master Router:
-        Layer 0: ACTION - Create Project (Auto-generates Tech Stack)
-        Layer 1: CODE - Xiaomi
-        Layer 2: SEARCH - Vector DB
-        Layer 3: TALK - Llama 3 Mentor
-    """
-
-    # --- LAYER 0: ACTION LAYER (CREATE PROJECT) ---
-    # Trigger phrases: "create a project about", "post a project", "start a team"
-    action_keywords = ["create a project", "post a project", "start a new project", "create a team", "make a project about", "build a project"]
-    
-    if any(k in question.lower() for k in action_keywords):
-        print(f"🚀 Layer 0: Detected Project Creation Intent...")
-        # Pass the whole question as the "Idea"
-        return await create_ai_project(question, user_id)
-
-    # --- LAYER 1: CODING SPECIALIST (Xiaomi) ---
-    code_keywords = ["write code", "give code", "python script", "function to", "generate code", "html css", "code for", "fix this code", "api endpoint"]
-    is_code_request = any(keyword in question.lower() for keyword in code_keywords)
-
-    if is_code_request:
-        print(f"🔧 Layer 1: Routing to Xiaomi (Coder): {question[:30]}...")
-        try:
-            completion = await client.chat.completions.create(
-                model=CODER_MODEL,
-                messages=[
-                    {"role": "system", "content": "You are an expert coding assistant. Provide clean, working code. Do NOT use bold text asterisks in your explanations."},
-                    {"role": "user", "content": question}
-                ],
-                extra_body={"include_reasoning": False}
-            )
-            return completion.choices[0].message.content
-        except Exception as e:
-            print(f"⚠️ Xiaomi failed, falling back to Mentor: {e}")
-            pass 
-
-    # --- LAYER 2: RECOMMENDATION ENGINE (Team/User Matching) ---
-    find_keywords = [
-            # Direct requests
-            "suggest a team", "suggest teams", "find a project", "find projects",
-            "find me a team", "find me teams", "recommend a project", "recommend teams",
-            
-            # "Looking for..." variations
-            "looking for a team", "looking for teams", "looking for project", 
-            "looking for projects", "looking for developers", 
-            
-            # "Join" variations
-            "join a team", "join teams", "want to join", "joining a team",
-            
-            # "Using" / Technology focused
-            "teams using", "projects using", "team with", "project with",
-            
-            # Broad searches
-            "show me teams", "show teams", "list teams", "search for teams",
-            "who knows", "search for members", "need a team"
-        ]
+        response = "I tried to create the project but hit a snag. Please try again."
         
-    # This check sees if ANY of the above phrases are in your question
-    is_search_request = any(keyword in question.lower() for keyword in find_keywords)
+    return {"final_response": response}
 
-    if is_search_request:
-        print(f"🔍 Layer 2: Searching Vector DB for Matches...")
-        try:
-            search_type = "team" 
-            if any(k in question.lower() for k in ["developer", "who", "member", "person", "user"]):
-                search_type = "user"
+async def coder_node(state: AgentState):
+    """Handles Coding Requests."""
+    print("🔧 Coder Node Active")
+    
+    try:
+        completion = await client.chat.completions.create(
+            model=CODER_MODEL,
+            messages=[
+                {"role": "system", "content": "You are an expert coding assistant. Provide clean code."},
+                {"role": "user", "content": state["question"]}
+            ]
+        )
+        return {"final_response": completion.choices[0].message.content}
+    except:
+        return {"final_response": "I'm having trouble generating code right now."}
 
-            # Combine question + skills for better matching
-            search_query = f"{question} {', '.join(user_skills)}"
+async def search_node(state: AgentState):
+    """Handles Vector Search."""
+    print("🔍 Search Node Active")
+    
+    # 1. Decide Filter
+    filter_type = "team"
+    if any(k in state["question"].lower() for k in ["developer", "member", "user"]):
+        filter_type = "user"
+        
+    # 2. Search (Run synchronous function in thread)
+    query = f"{state['question']} {', '.join(state['user_skills'])}"
+    matches = await asyncio.to_thread(search_vectors, query, filter_type)
+    
+    if not matches:
+        return {"final_response": "I couldn't find any matching teams or members right now."}
+        
+    # 3. Summarize Matches
+    context = "\n\n".join(matches)
+    prompt = f"""
+    Recommend the best fit from these matches for the request: "{state['question']}"
+    Matches:
+    {context}
+    """
+    
+    completion = await client.chat.completions.create(
+        model=MENTOR_MODEL,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return {"final_response": completion.choices[0].message.content}
 
-            # Direct await (since search_vectors is async/wrapped)
-            matches = await asyncio.to_thread(search_vectors, search_query, filter_type=search_type)
-            
-            if matches:
-                context_text = "\n\n".join(matches)
-                prompt = f"""
-                The user asked: "{question}"
-                
-                Here are the REAL matches from our database:
-                {context_text}
-                
-                INSTRUCTIONS:
-                - Recommend ONLY the teams listed above.
-                - Tell them exactly which project or person is the best fit and why.
-                - Do NOT invent new team names.
-                - If the projects above aren't a perfect fit, explain why, but stick to the data.
-                - Do NOT use Markdown formatting (no asterisks).
-                """
-                
-                completion = await client.chat.completions.create(
-                    model=MENTOR_MODEL,
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                return completion.choices[0].message.content
-            else:
-                # 🔥 FIX 1: STOP HERE if no matches found. Prevent hallucination.
-                print("   -> No matches found in DB. Returning honest response.")
-                return "I searched our database, but I couldn't find any active teams matching your request right now. You can browse all open projects on the Marketplace page!"
+# app/services/chatbot_services.py
 
-        except Exception as e:
-            print(f"⚠️ Matcher Error: {e}")
-
-
-    # --- LAYER 3: KNOWLEDGE BASE ---
-    # (Kept the full detailed manual as requested)
+async def chat_node(state: AgentState):
+    """
+    Handles General Conversation.
+    Includes:
+    1. Full Platform Manual (Context)
+    2. User Skills & ID (Personalization)
+    3. Chat History (Memory)
+    """
+    print("🤖 Chat Node Active (Mentor Mode)")
+    
+    user_id = state["user_id"]
+    user_skills = state["user_skills"]
+    
+    # --- 1. DEFINE THE KNOWLEDGE BASE ---
     platform_guide = """
     PLATFORM MANUAL FOR COLLABQUEST
 
@@ -233,34 +222,35 @@ async def generate_chat_reply(question: str, user_skills: list[str], user_id: st
     - **FORMATTING:** Do NOT use bold text, asterisks (**), or Markdown headers (#). Write in clean, plain text. Use standard numbering (1., 2.) for lists.
     - Be patient, encouraging, and thorough.
     """
-
-    # --- BUILD HISTORY ---
-    try:
-        past_messages = await ChatMessage.find(
-            ChatMessage.user_id == user_id
-        ).sort("-timestamp").limit(6).to_list()
-    except Exception:
-        past_messages = []
     
-    messages_payload = [
-        {"role": "system", "content": system_instruction}
-    ]
-
-    # Add history (Reversed because DB gives newest first)
-    for msg in reversed(past_messages):
-        # Truncate to 200 chars to save context
-        q_text = (msg.question[:200] + '..') if len(msg.question) > 200 else msg.question
-        a_text = (msg.answer[:200] + '..') if len(msg.answer) > 200 else msg.answer
+    # --- 2. FETCH & FORMAT HISTORY ---
+    try:
+        # Get NEWEST 6 messages first (so we don't get old stuff from last year)
+        past_msgs_db = await ChatMessage.find(ChatMessage.user_id == user_id)\
+            .sort("-timestamp")\
+            .limit(6)\
+            .to_list()
+            
+        # Reverse them so they read chronologically (Old -> New) for the AI context window
+        past_msgs_db.reverse()
+    except:
+        past_msgs_db = []
+        
+    messages_payload = [{"role": "system", "content": system_instruction}]
+    
+    for m in past_msgs_db:
+        # Truncate slightly to save tokens if messages are huge
+        q_text = (m.question[:200] + '..') if len(m.question) > 200 else m.question
+        a_text = (m.answer[:200] + '..') if len(m.answer) > 200 else m.answer
         
         messages_payload.append({"role": "user", "content": q_text})
         messages_payload.append({"role": "assistant", "content": a_text})
+        
+    # Add the current user question from the State
+    messages_payload.append({"role": "user", "content": state["question"]})
 
-    # Add the current question
-    messages_payload.append({"role": "user", "content": question})
-
-    # --- CALL GEMINI/LLAMA ---
+    # --- 3. GENERATE REPLY ---
     try:
-        print(f"🤖 Routing to Mentor (Llama 3): {question[:30]}...")
         completion = await client.chat.completions.create(
             model=MENTOR_MODEL,
             messages=messages_payload,
@@ -269,8 +259,69 @@ async def generate_chat_reply(question: str, user_skills: list[str], user_id: st
                 "X-Title": "CollabQuest"
             }
         )
-        return completion.choices[0].message.content
-
+        return {"final_response": completion.choices[0].message.content}
     except Exception as e:
-        print(f"❌ AI Service Error: {e}")
-        return "I'm having trouble connecting to the network right now. Please try again in a moment."
+        print(f"Chat Node Error: {e}")
+        return {"final_response": "I'm having trouble connecting to the network right now. Please try again."}
+
+# --- 3. BUILD THE GRAPH ---
+
+workflow = StateGraph(AgentState)
+
+# Add Nodes
+workflow.add_node("router", router_node)
+workflow.add_node("planner", planner_node)
+workflow.add_node("coder", coder_node)
+workflow.add_node("searcher", search_node)
+workflow.add_node("chatter", chat_node)
+
+# Set Entry Point
+workflow.set_entry_point("router")
+
+# Define Logic (The Conditional Edges)
+def route_decision(state):
+    intent = state["intent"]
+    if intent == "CREATE_PROJECT": return "planner"
+    if intent == "CODE_REQUEST": return "coder"
+    if intent == "SEARCH_REQUEST": return "searcher"
+    return "chatter"
+
+workflow.add_conditional_edges(
+    "router",
+    route_decision,
+    {
+        "planner": "planner",
+        "coder": "coder",
+        "searcher": "searcher",
+        "chatter": "chatter"
+    }
+)
+
+# All nodes end after they work
+workflow.add_edge("planner", END)
+workflow.add_edge("coder", END)
+workflow.add_edge("searcher", END)
+workflow.add_edge("chatter", END)
+
+# Compile
+app = workflow.compile()
+
+# --- 4. EXPORT THE MAIN FUNCTION ---
+
+async def generate_chat_reply(question: str, user_skills: list[str], user_id: str) -> str:
+    """
+    The entry point called by your API.
+    It inputs the data into the Graph and waits for the result.
+    """
+    inputs = {
+        "question": question,
+        "user_skills": user_skills,
+        "user_id": user_id,
+        "intent": "",
+        "final_response": ""
+    }
+    
+    # Run the Graph
+    result = await app.ainvoke(inputs)
+    
+    return result["final_response"]

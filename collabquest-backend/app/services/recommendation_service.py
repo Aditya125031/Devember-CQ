@@ -13,6 +13,7 @@ embedding_function = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
 async def sync_data_to_chroma():
     """
     Reads ALL Users and Teams from MongoDB and saves them into ChromaDB.
+    This remains ASYNC because it reads from MongoDB using Beanie.
     """
     print("🔄 Syncing MongoDB to Vector Database...")
     
@@ -54,21 +55,21 @@ async def sync_data_to_chroma():
     else:
         print("⚠️ No data to sync.")
 
-# 🔥 UPDATE: Made this 'async' to help the chatbot
-async def search_vectors(query: str, filter_type: str = None):
+# 🔥 FIX: Removed 'async' to allow usage with asyncio.to_thread
+def search_vectors(query: str, filter_type: str = None):
     """
     Searches ChromaDB for matches.
     filter_type: "team" (find projects) or "user" (find developers)
     """
+    # Check if DB exists. We cannot 'await' the sync function here because this is now a sync function.
+    # Ensure you call `await sync_data_to_chroma()` in your main.py startup event!
     if not os.path.exists(CHROMA_PATH):
-        # If DB doesn't exist, try syncing first!
-        await sync_data_to_chroma()
-        if not os.path.exists(CHROMA_PATH):
-            return []
+        print("⚠️ ChromaDB not found. Please sync data first.")
+        return []
 
     db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
     
-    # Search for top 5 matches (Increased from 3 to give AI more options)
+    # Search for top 5 matches
     results = db.similarity_search(query, k=5)
     
     matches = []
