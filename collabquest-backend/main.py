@@ -1,17 +1,24 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from app.database import init_db
+import os
+from dotenv import load_dotenv
 from app.routes import auth_routes, user_routes, team_routes, match_routes, notification_routes, chatbot_routes
 
 # 1. NEW IMPORT: Bring in the sync function
 from app.services.recommendation_service import sync_data_to_chroma
 
+load_dotenv()
+
 app = FastAPI(title="CollabQuest API", version="1.0")
+
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 # --- CORS SETTINGS ---
 origins = [
     "http://localhost:3000",
-    "http://127.0.0.1:3000",
+    FRONTEND_URL,
 ]
 
 app.add_middleware(
@@ -21,6 +28,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+os.makedirs("uploads", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 @app.on_event("startup")
 async def start_db():

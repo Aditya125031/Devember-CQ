@@ -31,3 +31,9 @@ tiktoken
 google-auth-httplib2
 google-generativeai
 langchain-google-genai
+certifi     # For SSL certificates
+sentence-transformers
+numpy
+scikit-learn
+fastapi-mail
+python-multipart
