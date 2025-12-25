@@ -33,14 +33,17 @@ def calculate_time_overlap(user_avail: list, team_avail_flat: list) -> float:
 async def calculate_match_score(user: User, team: Team, team_members: List[User]) -> float:
     # 1. SEMANTIC MATCH (70%)
     if not user.embedding:
-        user_text = f"{' '.join([s.name for s in user.skills])} {' '.join(user.interests)} {user.about}"
+        skills_str = ' '.join([s.name for s in user.skills])
+        # Contextualize user data
+        user_text = f"Developer with skills: {skills_str}. Interests: {' '.join(user.interests)}. About: {user.about}"
         user.embedding = generate_embedding(user_text)
         await user.save()
         
     if not team.embedding:
-        # Prioritize Active Skills in embedding
+        # Prioritize Active Skills in embedding with explicit labels
         skills_text = ' '.join(team.active_needed_skills) if team.active_needed_skills else ' '.join(team.needed_skills)
-        team_text = f"{team.name} {team.description} {skills_text}"
+        # We explicitly add "Open Roles" and "Looking for" to weight these terms heavily in the semantic search
+        team_text = f"Project: {team.name}. Description: {team.description}. Looking for teammates with skills: {skills_text}. Open Roles: {skills_text}"
         team.embedding = generate_embedding(team_text)
         await team.save()
 
@@ -67,7 +70,7 @@ def calculate_project_match(user: User, project: Team) -> float:
         
     if not project.embedding:
         skills_text = ' '.join(project.active_needed_skills) if project.active_needed_skills else ' '.join(project.needed_skills)
-        project_text = f"{project.name} {project.description} {skills_text}"
+        project_text = f"Project: {project.name}. Description: {project.description}. Looking for teammates with skills: {skills_text}. Open Roles: {skills_text}"
         project.embedding = generate_embedding(project_text)
         
     semantic_score = calculate_similarity(user.embedding, project.embedding) * 100

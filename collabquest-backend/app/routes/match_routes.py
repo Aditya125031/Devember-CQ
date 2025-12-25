@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel
 from app.models import User, Team, Swipe, Match, Notification
 from app.auth.dependencies import get_current_user
-from app.services.matching_service import calculate_project_match, calculate_user_compatibility
+from app.services.matching_service import calculate_project_match, calculate_user_compatibility, calculate_match_score
 from beanie.operators import Or
 import traceback
 
@@ -77,7 +77,6 @@ async def match_projects_for_user(
             continue
             
         # Filter: Tech Stack (Skills)
-        # If any of the requested skills matches the team's needed or active skills
         if skills:
             team_skills = set(s.lower() for s in (t.needed_skills + t.active_needed_skills))
             req_skills = set(s.lower() for s in skills)
@@ -88,7 +87,17 @@ async def match_projects_for_user(
     
     scored_projects = []
     for team in candidates:
-        score = calculate_project_match(current_user, team)
+        # --- FIX START: Fetch User Objects for Members ---
+        member_objects = []
+        for m_id in team.members:
+            user = await User.get(m_id)
+            if user:
+                member_objects.append(user)
+        
+        # Now pass the objects, NOT the ID strings
+        score = await calculate_match_score(current_user, team, member_objects)
+        # --- FIX END ---
+
         team_dict = team.dict()
         team_dict["id"] = str(team.id)
         team_dict["_id"] = str(team.id)
@@ -103,27 +112,40 @@ async def match_teammates_for_user(project_id: Optional[str] = None, current_use
     all_users = await User.find_all().to_list()
     exclude_ids = {str(current_user.id)}
     
+    target_project = None
+    existing_members_objects = []
+
+    # 1. Context Setup & Exclusion
     if project_id:
         target_project = await Team.get(project_id)
         if target_project:
             for member_id in target_project.members:
                 exclude_ids.add(member_id)
+                # Fetch member object for availability calculation later
+                m_user = await User.get(member_id)
+                if m_user: existing_members_objects.append(m_user)
     else:
+        # Fallback: exclude members from all my teams if no specific project context
         my_teams = await Team.find(Team.members == str(current_user.id)).to_list()
         for team in my_teams:
             for member_id in team.members:
                 exclude_ids.add(member_id)
 
-    # 3. Filter: exclude known users AND users NOT looking for a team
+    # 2. Filter Candidates
     candidates = [
         u for u in all_users 
         if str(u.id) not in exclude_ids 
-        and u.is_looking_for_team is True # <--- VISIBILITY CHECK
+        and u.is_looking_for_team is True # Explicitly check visibility
     ]
 
     scored_users = []
     for candidate in candidates:
-        score = calculate_user_compatibility(current_user, candidate)
+        if target_project:
+            # USE ADVANCED CALCULATOR (Semantic + Availability)
+            score = await calculate_match_score(candidate, target_project, existing_members_objects)
+        else:
+            score = await calculate_user_compatibility(current_user, candidate)
+
         user_dict = candidate.dict()
         user_dict["id"] = str(candidate.id)
         user_dict["_id"] = str(candidate.id)
