@@ -37,3 +37,6 @@ uploads/
 # Add these lines to your .gitignore file
 echo "__pycache__/" >> .gitignore
 echo "*.pyc" >> .gitignore
+
+chroma_db_matching/
+echo "chroma_db_matching/" >> .gitignore

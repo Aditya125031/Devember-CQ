@@ -4,8 +4,11 @@ from app.models import User
 from app.auth.dependencies import get_current_user
 import os
 from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
+from dotenv import load_dotenv
 
 router = APIRouter()
+
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 # --- EMAIL CONFIGURATION ---
 conf = ConnectionConfig(
@@ -51,7 +54,7 @@ async def send_email(
     formatted_body = email_data.body.replace("\n", "<br>")
     
     # Link to the sender's profile (Assuming frontend runs on localhost:3000)
-    profile_url = f"http://localhost:3000/profile/{current_user.id}"
+    profile_url = f"{FRONTEND_URL}/profile/{current_user.id}"
 
     # HTML Body
     html_body = f"""

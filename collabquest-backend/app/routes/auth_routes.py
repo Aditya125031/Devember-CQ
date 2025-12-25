@@ -8,8 +8,13 @@ from app.auth.utils import (
 )
 from app.models import User, TrustBreakdown
 from app.database import init_db
+import os
+from dotenv import load_dotenv
 
 router = APIRouter()
+
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+API_URL = os.getenv("API_URL", "http://localhost:8000")
 
 # --- REQUEST MODELS ---
 class EmailRegisterRequest(BaseModel):
@@ -89,7 +94,7 @@ async def github_callback(code: str):
     # Generate JWT for the Frontend
     jwt_token = create_access_token({"sub": str(user.id)})
     
-    return RedirectResponse(f"http://localhost:3000/dashboard?token={jwt_token}")
+    return RedirectResponse(f"{FRONTEND_URL}/dashboard?token={jwt_token}")
 
 @router.get("/dev/{username}")
 async def dev_login(username: str):
@@ -107,7 +112,7 @@ async def dev_login(username: str):
     jwt_token = create_access_token({"sub": str(user.id)})
     
     # 3. Redirect to Frontend just like a real login
-    return RedirectResponse(f"http://localhost:3000/dashboard?token={jwt_token}")
+    return RedirectResponse(f"{FRONTEND_URL}/dashboard?token={jwt_token}")
 
 # --- EMAIL & PASSWORD AUTH ---
 
@@ -183,7 +188,7 @@ async def login_email(request: EmailLoginRequest):
 async def google_login():
     """Redirect user to Google OAuth consent screen"""
     return RedirectResponse(
-        f"https://accounts.google.com/o/oauth2/v2/auth?client_id={GOOGLE_CLIENT_ID}&redirect_uri=http://localhost:8000/auth/google/callback&response_type=code&scope=openid profile email"
+        f"https://accounts.google.com/o/oauth2/v2/auth?client_id={GOOGLE_CLIENT_ID}&redirect_uri={API_URL}/auth/google/callback&response_type=code&scope=openid profile email"
     )
 
 @router.get("/google/callback")
@@ -191,7 +196,7 @@ async def google_callback(code: str):
     """
     Google OAuth callback handler
     """
-    token = await get_google_token(code, "http://localhost:8000/auth/google/callback")
+    token = await get_google_token(code, API_URL + "/auth/google/callback")
     if not token:
         raise HTTPException(status_code=400, detail="Google Login Failed")
     
@@ -217,4 +222,4 @@ async def google_callback(code: str):
     # Generate JWT
     jwt_token = create_access_token({"sub": str(user.id)})
     
-    return RedirectResponse(f"http://localhost:3000/dashboard?token={jwt_token}")
+    return RedirectResponse(f"{FRONTEND_URL}/dashboard?token={jwt_token}")
