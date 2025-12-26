@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, END
 
-from app.models import ChatMessage, Team, DeletionRequest, Notification, Task, User, CompletionRequest, MemberRequest, Match
+from app.models import ChatMessage, Team, DeletionRequest, Notification, Task, User, CompletionRequest, MemberRequest, Match, ExtensionRequest
 from app.services.recommendation_service import search_vectors
 
 load_dotenv()
@@ -49,8 +49,11 @@ async def router_node(state: AgentState):
     - CREATE_PROJECT (User wants to start/post a project)
     - DELETE_PROJECT (User wants to delete, remove, or cancel a project)
     - COMPLETE_PROJECT (User wants to mark a project as finished, done, or completed)
+    - LEAVE_TEAM (User wants to leave, quit, or exit a team/project)
     - REMOVE_MEMBER (User wants to kick, remove, or fire a member from a team)
+    - TRANSFER_LEADERSHIP (User wants to make someone else the leader, owner, or admin)
     - ASSIGN_TASK (User wants to assign, give, or create a task for someone)
+    - EXTEND_DEADLINE (User wants to change, push back, or extend a task deadline)
     - CODE_REQUEST (User asks for code/debugging)
     - SEARCH_REQUEST (User wants to find/join teams)
     - GENERAL_QUERY (Greetings, platform questions)
@@ -73,8 +76,9 @@ async def router_node(state: AgentState):
         intent = "GENERAL_QUERY"
         
     # Safety Check
-    if intent not in ["CREATE_PROJECT", "DELETE_PROJECT", "COMPLETE_PROJECT", "REMOVE_MEMBER",
-                       "ASSIGN_TASK", "CODE_REQUEST", "SEARCH_REQUEST", "GENERAL_QUERY"]:
+    if intent not in ["CREATE_PROJECT", "DELETE_PROJECT", "COMPLETE_PROJECT", "LEAVE_TEAM", "REMOVE_MEMBER",
+                      "TRANSFER_LEADERSHIP", "ASSIGN_TASK", "EXTEND_DEADLINE",
+                      "CODE_REQUEST", "SEARCH_REQUEST", "GENERAL_QUERY"]:
         intent = "GENERAL_QUERY"
         
     return {"intent": intent}
@@ -116,19 +120,25 @@ async def planner_node(state: AgentState):
     return {"final_response": response}
 
 async def manager_node(state: AgentState):
-    """Handles Project Management (Deletion, Completion & Tasks)."""
+    """Handles Project Management (Delete, Complete, Leave, Remove, Transfer, Assign, Extend)."""
     print("👔 Manager Node Active")
     user_id = state["user_id"]
     intent = state["intent"]
     
-    # 1. Fetch projects where user is Leader
-    owned_teams = await Team.find(Team.members[0] == user_id).to_list()
-    
-    if not owned_teams:
-        return {"final_response": "You can only manage projects where you are the Team Leader. I didn't find any active projects led by you."}
+    # 1. Fetch relevant projects
+    # ✅ LOGIC UPDATE: LEAVE and EXTEND require membership. Others require Leadership.
+    if intent in ["LEAVE_TEAM", "EXTEND_DEADLINE"]:
+        relevant_teams = await Team.find(Team.members == user_id).to_list()
+        error_msg = "You are not part of any teams right now."
+    else:
+        relevant_teams = await Team.find(Team.members[0] == user_id).to_list()
+        error_msg = "You can only manage projects where you are the Team Leader."
 
-    # 2. Identify Target Project (Common Logic)
-    team_names = [t.name for t in owned_teams]
+    if not relevant_teams:
+        return {"final_response": error_msg}
+
+    # 2. Identify Target Project
+    team_names = [t.name for t in relevant_teams]
     project_prompt = f"""
     User Input: "{state['question']}"
     User's Projects: {', '.join(team_names)}
@@ -146,8 +156,8 @@ async def manager_node(state: AgentState):
     except:
         target_name = "NONE"
 
-    target_team = next((t for t in owned_teams if t.name.lower() == target_name.lower()), None)
-    
+    target_team = next((t for t in relevant_teams if t.name.lower() == target_name.lower()), None)
+
     if not target_team:
         # 🔥 NEW: Instructional Error Message
         action_instruction = ""
@@ -155,10 +165,14 @@ async def manager_node(state: AgentState):
             action_instruction = "Delete [Project Name]"
         elif intent == "COMPLETE_PROJECT": 
             action_instruction = "Mark [Project Name] as complete"
+        elif intent == "LEAVE_TEAM":
+            action_instruction = "Leave [Project Name]"
         elif intent == "REMOVE_MEMBER":                                 
             action_instruction = "Remove [Member Name] from [Project Name]"
         elif intent == "ASSIGN_TASK": 
             action_instruction = "Assign task in [Project Name]"
+        elif intent == "EXTEND_DEADLINE": 
+            action_instruction = "Extend deadline of [Task] in [Project Name]"
         else:
             action_instruction = "Manage [Project Name]"
 
@@ -236,7 +250,62 @@ async def manager_node(state: AgentState):
         
         return {"final_response": f"🏁 **Vote Initiated:** I've started a vote to complete **{target_team.name}**. Team members must approve."}
 
-    # --- BRANCH C: REMOVE MEMBER ---
+    # --- BRANCH C: LEAVE TEAM ---
+    if intent == "LEAVE_TEAM":
+        # 1. Leader Check
+        if target_team.members[0] == user_id:
+            return {"final_response": "❌ You are the **Team Leader**. You cannot leave your own project. Please **Delete** it or **Transfer Leadership** first."}
+        
+        # 2. Duplicate Request Check
+        existing = next((r for r in target_team.member_requests if r.target_user_id == user_id and r.is_active), None)
+        if existing:
+            return {"final_response": "⚠️ You already have a pending request to leave this team."}
+
+        # 3. Planning Phase (Instant Leave)
+        if target_team.status == "planning":
+            target_team.members.remove(user_id)
+            await target_team.save()
+            
+            # Cleanup Match
+            await Match.find(Match.project_id == str(target_team.id), Match.user_id == user_id).delete()
+            
+            # Notify Leader
+            leader_id = target_team.members[0]
+            await Notification(
+                recipient_id=leader_id, 
+                sender_id=user_id, 
+                message=f"Member left project '{target_team.name}'.", 
+                type="info"
+            ).insert()
+            
+            return {"final_response": f"👋 **You left the team.** Since the project is in the planning phase, you were removed immediately."}
+
+        # 4. Active Phase (Vote Required)
+        else:
+            req = MemberRequest(
+                target_user_id=user_id, 
+                type="leave", 
+                explanation="Left via AI Chat", 
+                initiator_id=user_id, 
+                votes={user_id: "approve"} # You vote yes for yourself
+            )
+            target_team.member_requests.append(req)
+            await target_team.save()
+            
+            # Notify Team
+            for m_id in target_team.members:
+                if m_id != user_id:
+                    await Notification(
+                        recipient_id=m_id, 
+                        sender_id=user_id, 
+                        message=f"Member wants to LEAVE '{target_team.name}'. Vote required.", 
+                        type="member_request", 
+                        related_id=str(target_team.id)
+                    ).insert()
+
+            return {"final_response": f"🗳️ **Vote Started.** Since the project is Active, your team must vote to let you leave. Notifications sent."}
+    
+    # --- BRANCH D: REMOVE MEMBER ---
     if intent == "REMOVE_MEMBER":
         # A. Fetch Member Names
         members_map = []
@@ -295,18 +364,20 @@ async def manager_node(state: AgentState):
             if existing:
                 return {"final_response": f"⚠️ A vote to remove <@{target_id}> is already active."}
 
+            # 🔥 UPDATED LOGIC HERE 🔥
             req = MemberRequest(
                 target_user_id=target_id, 
                 type="remove", 
                 explanation="Removed via AI Manager", 
                 initiator_id=user_id, 
-                votes={user_id: "approve"}
+                votes={} # 1️⃣ Votes started at 0 (No default vote)
             )
             target_team.member_requests.append(req)
             await target_team.save()
             
             for m_id in target_team.members:
-                if m_id != user_id:
+                # 2️⃣ Exclude the target user from notifications
+                if m_id != user_id and m_id != target_id:
                     await Notification(
                         recipient_id=m_id, 
                         sender_id=user_id, 
@@ -315,9 +386,57 @@ async def manager_node(state: AgentState):
                         related_id=str(target_team.id)
                     ).insert()
 
-            return {"final_response": f"🗳️ **Vote Started.** Since the project is Active, I've initiated a vote to remove <@{target_id}>. Other members have been notified."}
+            return {"final_response": f"🗳️ **Vote Started.** I've initiated a vote to remove <@{target_id}>. Other members have been notified (Target excluded)."}    
     
-    # --- BRANCH D: ASSIGN TASK ---
+    # --- BRANCH E: TRANSFER LEADERSHIP (NEW) ---
+    if intent == "TRANSFER_LEADERSHIP":
+        # 1. Permission Check
+        if target_team.members[0] != user_id:
+             return {"final_response": "❌ Only the **Team Leader** can transfer leadership."}
+
+        # 2. Extract New Leader
+        members_map = []
+        for m_id in target_team.members:
+            u = await User.get(m_id)
+            if u: members_map.append(f"{u.username} (ID: {str(u.id)})")
+
+        extraction_prompt = f"""
+        User Input: "{state['question']}"
+        Team Members: {', '.join(members_map)}
+        
+        Who should be the new leader? 
+        Return JSON: {{ "target_id": "..." }}
+        """
+        try:
+            completion = await client.chat.completions.create(model=ROUTER_MODEL, messages=[{"role": "user", "content": extraction_prompt}])
+            clean_json = completion.choices[0].message.content.replace("```json", "").replace("```", "").strip()
+            data = json.loads(clean_json)
+            target_id = data.get("target_id")
+        except: target_id = "NONE"
+
+        if target_id == "NONE" or target_id == user_id:
+             return {"final_response": "I couldn't figure out who you want to transfer leadership to. Please specify a valid team member."}
+        
+        # 3. Perform Transfer
+        if target_id not in target_team.members:
+             return {"final_response": "❌ That user is not in this team."}
+
+        # Swap: Remove new leader, Insert at index 0
+        target_team.members.remove(target_id)
+        target_team.members.insert(0, target_id)
+        await target_team.save()
+        
+        # Notify New Leader
+        await Notification(
+            recipient_id=target_id, 
+            sender_id=user_id, 
+            message=f"👑 You have been promoted to Team Leader of '{target_team.name}'!", 
+            type="info"
+        ).insert()
+        
+        return {"final_response": f"👑 **Leadership Transferred.** <@{target_id}> is now the new Team Leader of **{target_team.name}**."}
+
+    # --- BRANCH F: ASSIGN TASK ---
     if intent == "ASSIGN_TASK":
         # A. Fetch Member Names
         members_map = []
@@ -375,7 +494,75 @@ async def manager_node(state: AgentState):
             print(f"Task Error: {e}")
             return {"final_response": "I understood the project, but failed to parse the task details. Try: 'Assign [Task] to [Person] in [Project]'."}
 
+    # --- BRANCH G: EXTEND DEADLINE ---
+    if intent == "EXTEND_DEADLINE":
+        # 1. Identify Task and New Date
+        tasks_list = [f"Desc: {t.description} | ID: {str(t.id)}" for t in target_team.tasks]
+        
+        extraction_prompt = f"""
+        User Input: "{state['question']}"
+        Available Tasks: {json.dumps(tasks_list)}
+        
+        Identify which task the user wants to extend and how many EXTRA days.
+        Return JSON: {{ "task_description": "Exact text from list", "days_to_add": 3 }}
+        """
+        try:
+            completion = await client.chat.completions.create(model=MENTOR_MODEL, messages=[{"role": "user", "content": extraction_prompt}])
+            clean_json = completion.choices[0].message.content.replace("```json", "").replace("```", "").strip()
+            data = json.loads(clean_json)
+            target_desc = data.get("task_description")
+            days = int(data.get("days_to_add", 3))
+        except: 
+            return {"final_response": "I couldn't figure out which task you want to extend. Please say something like 'Extend the Login Page task by 2 days'."}
+
+        # 2. Find the Task Object
+        target_task = next((t for t in target_team.tasks if t.description == target_desc), None)
+        if not target_task:
+             return {"final_response": f"❌ I couldn't find the task '{target_desc}' in this project."}
+
+        # 3. SECURITY: Only Assignee can request extension
+        if target_task.assignee_id != user_id:
+             return {"final_response": f"🚫 **Access Denied.** You can only request extensions for tasks assigned to **YOU**. This task belongs to <@{target_task.assignee_id}>."}
+
+        # 4. Check Pending Requests
+        if any(r for r in target_team.extension_requests if r.task_id == str(target_task.id) and r.is_active):
+             return {"final_response": "⚠️ There is already an active extension request for this task."}
+
+        # 5. Logic: Solo vs Team
+        new_deadline = target_task.deadline + timedelta(days=days)
+
+        if len(target_team.members) == 1:
+            # Instant update for solo
+            target_task.deadline = new_deadline
+            await target_team.save()
+            return {"final_response": f"✅ **Deadline Extended.** The new deadline for '{target_task.description}' is {new_deadline.strftime('%Y-%m-%d')}."}
+        else:
+            # Vote for Team
+            req = ExtensionRequest(
+                task_id=str(target_task.id),
+                requested_deadline=new_deadline,
+                reason="Requested via AI Chat",
+                initiator_id=user_id,
+                votes={}
+            )
+            target_team.extension_requests.append(req)
+            await target_team.save()
+
+            # Notify Team
+            for m_id in target_team.members:
+                if m_id != user_id:
+                    await Notification(
+                        recipient_id=m_id, 
+                        sender_id=user_id, 
+                        message=f"Vote to EXTEND deadline for task '{target_task.description}'.", 
+                        type="extension_request", 
+                        related_id=str(target_team.id)
+                    ).insert()
+            
+            return {"final_response": f"🗳️ **Vote Started.** You requested {days} extra days. Team members have been notified to vote."}
+
     return {"final_response": "I'm not sure what management action you wanted to take."}
+
 
 async def coder_node(state: AgentState):
     """Handles Coding Requests with Context."""
@@ -525,14 +712,11 @@ workflow.set_entry_point("router")
 
 # Define Logic (The Conditional Edges)
 def route_decision(state):
-    intent = state["intent"]
-    if intent == "CREATE_PROJECT": return "planner"
-    if intent == "DELETE_PROJECT": return "manager"
-    if intent == "COMPLETE_PROJECT": return "manager"
-    if intent == "REMOVE_MEMBER": return "manager"
-    if intent == "ASSIGN_TASK": return "manager"
-    if intent == "CODE_REQUEST": return "coder"
-    if intent == "SEARCH_REQUEST": return "searcher"
+    i = state["intent"]
+    if i == "CREATE_PROJECT": return "planner"
+    if i in ["DELETE_PROJECT", "COMPLETE_PROJECT", "LEAVE_TEAM", "REMOVE_MEMBER", "TRANSFER_LEADERSHIP", "ASSIGN_TASK", "EXTEND_DEADLINE"]: return "manager"
+    if i == "CODE_REQUEST": return "coder"
+    if i == "SEARCH_REQUEST": return "searcher"
     return "chatter"
 
 workflow.add_conditional_edges(
