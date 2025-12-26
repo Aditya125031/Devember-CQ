@@ -23,7 +23,7 @@ client = AsyncOpenAI(
 # Models
 ROUTER_MODEL = "arcee-ai/trinity-mini:free"
 CODER_MODEL = "xiaomi/mimo-v2-flash:free"
-MENTOR_MODEL = "allenai/olmo-3.1-32b-think:free" 
+MENTOR_MODEL = "meta-llama/llama-3.3-70b-instruct:free" 
 
 # --- 1. DEFINE THE STATE (The Memory of the Graph) ---
 class AgentState(TypedDict):
