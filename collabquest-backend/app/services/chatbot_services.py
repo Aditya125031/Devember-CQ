@@ -1,6 +1,7 @@
 import os
 import asyncio
 import json
+import re
 from typing import TypedDict, Literal
 from datetime import datetime, timedelta
 
@@ -11,6 +12,60 @@ from langgraph.graph import StateGraph, END
 
 from app.models import ChatMessage, Team, DeletionRequest, Notification, Task, User, CompletionRequest, MemberRequest, Match, ExtensionRequest
 from app.services.recommendation_service import search_vectors
+from app.services.vector_store import generate_embedding, calculate_similarity
+
+INTENT_EXAMPLES = {
+    "CREATE_PROJECT": [
+        "create a new project", "start a team", "post an idea", "build a new app", "launch a startup", "I have an idea for a project"
+    ],
+    "DELETE_PROJECT": [
+        "delete this project", "remove this team", "cancel the project", "destroy the group", "delete my project"
+    ],
+    "COMPLETE_PROJECT": [
+        "mark as complete", "finish the project", "we are done", "project is finished", "close the project"
+    ],
+    "LEAVE_TEAM": [
+        "leave the team", "quit this project", "exit the group", "resign from team", "remove me from this project"
+    ],
+    "REMOVE_MEMBER": [
+        "remove a member", "kick someone out", "fire a developer", "ban a user", "remove him from the team"
+    ],
+    "TRANSFER_LEADERSHIP": [
+        "transfer leadership", "make him the leader", "promote to admin", "change team owner", "give him leadership"
+    ],
+    "ASSIGN_TASK": [
+        "assign a task", "give a job to someone", "create a to-do item", "delegate this work", "add a task for her"
+    ],
+    "EXTEND_DEADLINE": [
+        "extend the deadline", "push back the date", "need more time", "change the due date", "postpone the task"
+    ],
+    "SHOW_TASKS": [
+        "show my tasks", "what do i need to do", "check my todo list", "pending work", "my assignments"
+    ],
+    "DAILY_BRIEFING": [
+        "daily briefing", "what did i miss", "show notifications", "any updates", "summarize my day"
+    ],
+    "ANALYZE_TEAM": [
+        "analyze the team", "check skill gaps", "what skills are missing", "evaluate our roster", "team analysis"
+    ],
+    "SEND_MESSAGE": [
+        "send a message", "tell the team", "broadcast an announcement", "message him", "notify everyone"
+    ],
+    "CODE_REQUEST": [
+        "write python code", "fix this bug", "debug this function", "how do I code this", "generate a script"
+    ],
+    "SEARCH_REQUEST": [
+        "find a project", "search for teams", "projects using react", "looking for a team to join"
+    ],
+    "GENERAL_QUERY": [
+        "Hello, how are you?", 
+        "tell me about my ongoing projects",  # <--- ADD THIS
+        "what projects am I working on?",     # <--- ADD THIS
+        "list my projects",                   # <--- ADD THIS
+        "who are you?",
+        "what can you do?"
+    ]
+}
 
 load_dotenv()
 
@@ -21,7 +76,7 @@ client = AsyncOpenAI(
 )
 
 # Models
-ROUTER_MODEL = "arcee-ai/trinity-mini:free"
+ROUTER_MODEL = "nvidia/nemotron-3-nano-30b-a3b:free"
 CODER_MODEL = "xiaomi/mimo-v2-flash:free"
 MENTOR_MODEL = "meta-llama/llama-3.3-70b-instruct:free" 
 
@@ -33,59 +88,145 @@ class AgentState(TypedDict):
     intent: str
     final_response: str
 
+async def find_relevant_project(user_input: str, projects: list[Team]):
+    """
+    Smartly finds a project from a list using 2 layers of search:
+    1. Exact/Containment Match (Fastest) - e.g. "Delete Maze Solver" matches "Maze Solver"
+    2. Vector/Semantic Match (Smartest) - e.g. "Maze Sovler" matches "Maze Solver"
+    """
+    if not projects: return None
+    
+    user_input_lower = user_input.lower().strip()
+    
+    # Sort by length descending so "Maze Solver Pro" matches before "Maze Solver"
+    sorted_projects = sorted(projects, key=lambda p: len(p.name), reverse=True)
+    
+    # --- LAYER 1: Project Name in Input (Exact Match) ---
+    # Example: User says "Delete Maze Solver now" -> Matches "Maze Solver"
+    for p in sorted_projects:
+        if p.name.lower() in user_input_lower:
+            return p
+
+    # --- LAYER 2: 🔍 Vector Search (Semantic/Typos) ---
+    # Only runs if exact text match failed.
+    target_vec = generate_embedding(user_input)
+    best_score = 0.0
+    best_match = None
+    
+    for p in projects:
+        p_vec = generate_embedding(p.name)
+        score = calculate_similarity(target_vec, p_vec)
+        
+        if score > best_score:
+            best_score = score
+            best_match = p
+    
+    # Threshold: 0.45 balances flexibility with accuracy
+    if best_score > 0.45:
+        return best_match
+        
+    return None
+
+async def get_semantic_intent(user_input: str) -> str | None:
+    """
+    Hybrid Router Layer 1: Vector Similarity Check.
+    Returns the intent if confidence > 0.7, else None.
+    """
+    user_vec = generate_embedding(user_input)
+    best_score = 0.0
+    best_intent = None
+
+    for intent, examples in INTENT_EXAMPLES.items():
+        for example in examples:
+            example_vec = generate_embedding(example)
+            score = calculate_similarity(user_vec, example_vec)
+            
+            if score > best_score:
+                best_score = score
+                best_intent = intent
+
+    # 🛡️ Threshold: 0.70 (70%)
+    # If we are 70% sure, we skip the LLM. If not, we let the LLM decide.
+    if best_score > 0.70:
+        return best_intent
+    
+    return None
+
 # --- 2. DEFINE THE NODES (The Agents) ---
 
-# app/services/chatbot_services.py
-
-# ... existing imports ...
-
-# REPLACE the router_node function with this:
 async def router_node(state: AgentState):
-    """Decides which path to take."""
-    print(f"🧠 Routing: {state['question'][:30]}...")
+    """
+    Decides which path to take using a 'Best of Both Worlds' approach:
+    1. Semantic Search (Fast & Precise)
+    2. Few-Shot LLM (Smart & Flexible)
+    """
+    question = state["question"]
+    print(f"🧠 Routing: {question[:30]}...")
     
-    # 🔥 FIX: Use a simple string instead of ChatPromptTemplate
-    router_prompt = """You are a Router. Classify the user input into EXACTLY ONE category:
-    - CREATE_PROJECT (User wants to start/post a project)
-    - DELETE_PROJECT (User wants to delete, remove, or cancel a project)
-    - COMPLETE_PROJECT (User wants to mark a project as finished, done, or completed)
-    - LEAVE_TEAM (User wants to leave, quit, or exit a team/project)
-    - REMOVE_MEMBER (User wants to kick, remove, or fire a member from a team)
-    - TRANSFER_LEADERSHIP (User wants to make someone else the leader, owner, or admin)
-    - ASSIGN_TASK (User wants to assign, give, or create a task for someone)
-    - EXTEND_DEADLINE (User wants to change, push back, or extend a task deadline)
-    - SHOW_TASKS (User wants to see their assigned tasks, to-do list, or pending work)
-    - DAILY_BRIEFING (User wants a summary of notifications, updates, or what they missed)
-    - ANALYZE_TEAM (User wants to check skill gaps, team composition, or staffing needs)
-    - SEND_MESSAGE (User wants to send a message/notification to a specific member OR the whole team)
-    - CODE_REQUEST (User asks for code/debugging)
-    - SEARCH_REQUEST (User wants to find/join teams)
-    - GENERAL_QUERY (Greetings, platform questions)
+    # --- PHASE 1: SEMANTIC ROUTING (Speed Layer) ---
+    semantic_intent = await get_semantic_intent(question)
     
-    User Input: {question}
+    if semantic_intent:
+        print(f"⚡ Semantic Router: {semantic_intent}")
+        return {"intent": semantic_intent}
+
+    # --- PHASE 2: LLM ROUTING (Intelligence Layer) ---
+    # If semantic search wasn't confident, we ask the LLM.
+    # We use "Few-Shot Prompting" (giving examples) to make it smarter.
     
-    Respond with ONLY the category name."""
+    router_prompt = """You are the Intent Classifier for a Project Management AI.
+    Classify the user's input into EXACTLY ONE of these categories:
+
+    [CATEGORIES]
+    - CREATE_PROJECT
+    - DELETE_PROJECT
+    - COMPLETE_PROJECT
+    - LEAVE_TEAM
+    - REMOVE_MEMBER
+    - TRANSFER_LEADERSHIP
+    - ASSIGN_TASK
+    - EXTEND_DEADLINE
+    - SHOW_TASKS
+    - DAILY_BRIEFING
+    - ANALYZE_TEAM
+    - SEND_MESSAGE
+    - CODE_REQUEST
+    - SEARCH_REQUEST
+    - GENERAL_QUERY
+
+    [FEW-SHOT EXAMPLES]
+    Input: "I want to build a React app" -> CREATE_PROJECT
+    Input: "I'm done with this project" -> COMPLETE_PROJECT
+    Input: "Kick John out of the group" -> REMOVE_MEMBER
+    Input: "Tell everyone the meeting is at 5" -> SEND_MESSAGE
+    Input: "How do I center a div?" -> CODE_REQUEST
+    Input: "Find me a team doing AI" -> SEARCH_REQUEST
+    Input: "Hello, how are you?" -> GENERAL_QUERY
+
+    [YOUR TASK]
+    User Input: "{question}"
     
-    # 🔥 FIX: Synchronous standard python formatting
-    chain_input = router_prompt.format(question=state["question"])
+    Respond with ONLY the category name. Do not explain."""
     
     try:
         completion = await client.chat.completions.create(
             model=ROUTER_MODEL,
-            messages=[{"role": "user", "content": chain_input}],
+            messages=[{"role": "user", "content": router_prompt.format(question=question)}],
             temperature=0.0
         )
         intent = completion.choices[0].message.content.strip().upper()
     except:
         intent = "GENERAL_QUERY"
         
-    # Safety Check
-    if intent not in ["CREATE_PROJECT", "DELETE_PROJECT", "COMPLETE_PROJECT", "LEAVE_TEAM", "REMOVE_MEMBER",
-                      "TRANSFER_LEADERSHIP", "ASSIGN_TASK", "EXTEND_DEADLINE", "SHOW_TASKS",
-                      "DAILY_BRIEFING", "ANALYZE_TEAM", "SEND_MESSAGE",
-                      "CODE_REQUEST", "SEARCH_REQUEST", "GENERAL_QUERY"]:
+    # --- PHASE 3: SAFETY VALIDATION ---
+    # Ensure the LLM didn't hallucinate a fake category
+    valid_intents = list(INTENT_EXAMPLES.keys()) + ["GENERAL_QUERY"]
+    
+    if intent not in valid_intents:
+        # Fallback: If LLM gives garbage, treat as general chat
         intent = "GENERAL_QUERY"
         
+    print(f"🤖 LLM Router: {intent}")
     return {"intent": intent}
 
 async def planner_node(state: AgentState):
@@ -95,6 +236,8 @@ async def planner_node(state: AgentState):
     system_prompt = """
     You are a Technical Project Manager.
     Convert the idea: "{idea}" into a JSON Project Plan.
+    
+    CRITICAL: Return ONLY valid JSON.
     JSON Format: {{ "name": "...", "description": "...", "needed_skills": ["..."], "roadmap": ["..."] }}
     """
     
@@ -104,8 +247,16 @@ async def planner_node(state: AgentState):
             messages=[{"role": "user", "content": system_prompt.format(idea=state["question"])}]
         )
         raw_text = completion.choices[0].message.content
-        clean_json = raw_text.replace("```json", "").replace("```", "").strip()
-        data = json.loads(clean_json)
+        
+        # 🛡️ ROBUST JSON EXTRACTOR
+        # Finds the content between the first { and last }
+        json_match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+        
+        if json_match:
+            clean_json = json_match.group(0)
+            data = json.loads(clean_json)
+        else:
+            raise ValueError("No JSON object found in response")
         
         # Database Action
         new_team = Team(
@@ -114,100 +265,99 @@ async def planner_node(state: AgentState):
             leader_id=state["user_id"],
             needed_skills=data["needed_skills"],
             members=[state["user_id"]],
-            roadmap=data.get("roadmap", [])
+            
+            # 🔥 FIX: Use correct field name & match Model type (Dict)
+            # The AI gives a list, but your Model wants a Dict.
+            project_roadmap={"steps": data.get("roadmap", [])} 
         )
         await new_team.insert()
         
         response = f"✅ Created **{data['name']}**!\nStack: {', '.join(data['needed_skills'])}"
+
     except Exception as e:
-        response = "I tried to create the project but hit a snag. Please try again."
+        print(f"❌ PLANNER ERROR: {str(e)}")
+        response = "I tried to create the project but hit a snag (JSON Error). Please try again."
         
     return {"final_response": response}
 
+def extract_json_safely(raw_text: str):
+    """
+    Robustly extracts a JSON object from a string.
+    Fixes common AI errors like Markdown blocks or extra text.
+    """
+    try:
+        # 1. Strip Markdown Code Blocks (```json ... ```)
+        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_text, re.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+            
+        # 2. Find the first valid { ... } block
+        match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+            
+        # 3. Direct Parse
+        return json.loads(raw_text)
+    except Exception:
+        return None
+
 async def manager_node(state: AgentState):
-    """Handles Project Management (All Actions)."""
+    """Handles Project Management Actions."""
     print("👔 Manager Node Active")
     user_id = state["user_id"]
     intent = state["intent"]
     
-  # 1. Fetch relevant projects
-    # Members can access these features. Leaders can do everything.
-    member_allowed = ["LEAVE_TEAM", "EXTEND_DEADLINE", "SHOW_TASKS", "ANALYZE_TEAM", "DAILY_BRIEFING"]
-    
-    if intent in member_allowed:
-        relevant_teams = await Team.find(Team.members == user_id).to_list()
-        error_msg = "You are not part of any teams right now."
-    else:
-        relevant_teams = await Team.find(Team.members[0] == user_id).to_list()
-        error_msg = "You can only manage projects where you are the Team Leader."
-
+    # 1. Fetch Projects
+    relevant_teams = await Team.find(Team.members == user_id).to_list()
     if not relevant_teams:
-        return {"final_response": error_msg}
-    
-            # --- BRANCH I: SHOW MY TASKS ---
+        return {"final_response": "You don't have any projects to manage yet."}
+
+    # --- HANDLE GLOBAL INTENTS (No specific project needed) ---
     if intent == "SHOW_TASKS":
         my_tasks = []
-        
-        # 1. Loop through ALL teams the user is in
         for team in relevant_teams:
             for task in team.tasks:
-                # Check if assigned to user (and optionally if not completed)
                 if task.assignee_id == user_id:
-                    # Format: "Task Name (Project Name) - Due: Date"
-                    due_date = task.deadline.strftime('%Y-%m-%d')
-                    my_tasks.append(f"• **{task.description}** (in *{team.name}*) — 📅 Due {due_date}")
-
-        if not my_tasks:
-            return {"final_response": "🎉 **You're all caught up!** You have no pending tasks assigned to you."}
-        
-        formatted_list = "\n".join(my_tasks)
-        return {"final_response": f"📋 **Your To-Do List:**\n\n{formatted_list}"}
+                    due = task.deadline.strftime('%Y-%m-%d')
+                    my_tasks.append(f"• **{task.description}** (in *{team.name}*) — 📅 Due {due}")
+        if not my_tasks: return {"final_response": "🎉 **You're all caught up!** No pending tasks."}
+        return {"final_response": f"📋 **Your To-Do List:**\n\n" + "\n".join(my_tasks)}
 
     if intent == "DAILY_BRIEFING":
-        # Fetch last 10 notifications for user
         notifs = await Notification.find(Notification.recipient_id == user_id).sort("-timestamp").limit(10).to_list()
-        
-        if not notifs:
-            return {"final_response": "📭 **No new updates.** You are all caught up!"}
-        
-        # Format for AI
-        notif_text = "\n".join([f"- {n.message} ({n.timestamp.strftime('%Y-%m-%d %H:%M')})" for n in notifs])
-        
-        summary_prompt = f"""
-        User ID: {user_id}
-        Summarize these notifications into a natural, friendly paragraph (Briefing style).
-        Group related items.
-        
-        Notifications:
-        {notif_text}
+        if not notifs: return {"final_response": "📭 **No new updates.**"}
+        notif_text = "\n".join([f"- {n.message}" for n in notifs])
+        prompt = f"Summarize these notifications for User {user_id}:\n{notif_text}"
+        try:
+            completion = await client.chat.completions.create(model=MENTOR_MODEL, messages=[{"role": "user", "content": prompt}])
+            return {"final_response": f"🗞️ **Daily Briefing:**\n\n{completion.choices[0].message.content}"}
+        except: return {"final_response": "Could not summarize notifications."}
+
+    # --- SMART PROJECT IDENTIFICATION ---
+    # 1. Use the new Helper (Exact + Vector)
+    target_team = await find_relevant_project(state["question"], relevant_teams)
+
+    # 2. Fallback to AI if helper failed (Rare, but useful for complex sentences)
+    if not target_team:
+        team_names = [t.name for t in relevant_teams]
+        prompt = f"""
+        User: "{state['question']}"
+        Projects: {json.dumps(team_names)}
+        Which project is this about? Return JUST the exact name. If none, return "NONE".
         """
         try:
-            completion = await client.chat.completions.create(model=MENTOR_MODEL, messages=[{"role": "user", "content": summary_prompt}])
-            summary = completion.choices[0].message.content
-            return {"final_response": f"🗞️ **Daily Briefing:**\n\n{summary}"}
+            completion = await client.chat.completions.create(model=ROUTER_MODEL, messages=[{"role": "user", "content": prompt}], temperature=0.0)
+            extracted_name = completion.choices[0].message.content.strip()
+            target_team = next((t for t in relevant_teams if t.name.lower() == extracted_name.lower()), None)
         except:
-             return {"final_response": "I couldn't summarize your notifications right now."}
-        
-    # 2. Identify Target Project
-    team_names = [t.name for t in relevant_teams]
-    project_prompt = f"""
-    User Input: "{state['question']}"
-    User's Projects: {', '.join(team_names)}
-    
-    Which project is the user talking about? Return JUST the exact name.
-    If ambiguous or not found, return "NONE".
-    """
-    try:
-        completion = await client.chat.completions.create(
-            model=ROUTER_MODEL,
-            messages=[{"role": "user", "content": project_prompt}],
-            temperature=0.0
-        )
-        target_name = completion.choices[0].message.content.strip()
-    except:
-        target_name = "NONE"
+            pass
 
-    target_team = next((t for t in relevant_teams if t.name.lower() == target_name.lower()), None)
+    if not target_team:
+        return {"final_response": f"I'm not sure which project you mean. I can see these projects: **{', '.join([t.name for t in relevant_teams])}**"}
+    
+    # Check locked status
+    if target_team.status == "completed" and intent != "DELETE_PROJECT":
+        return {"final_response": f"❌ Project **{target_team.name}** is already completed and locked."}
 
     if not target_team:
         # 🔥 NEW: Instructional Error Message
@@ -236,10 +386,6 @@ async def manager_node(state: AgentState):
         return {
             "final_response": f"I'm not sure which project you mean. Please try again with the full command:\n\n👉 **'{action_instruction}'**"
         }
-    
-    # Check if already completed (unless we are trying to delete it, which is handled in branch A)
-    if target_team.status == "completed" and intent != "DELETE_PROJECT":
-        return {"final_response": f"❌ Project **{target_team.name}** is already completed and locked."}
 
     # --- BRANCH A: DELETE PROJECT ---
     if intent == "DELETE_PROJECT":
@@ -364,14 +510,16 @@ async def manager_node(state: AgentState):
     
     # --- BRANCH D: REMOVE MEMBER ---
     if intent == "REMOVE_MEMBER":
-        # A. Fetch Member Names
+        # 1. PERMISSION CHECK (Strict Leader Only)
+        if target_team.members[0] != user_id:
+             return {"final_response": "❌ **Access Denied.** Only the Team Leader can initiate a vote to remove members."}
+
+        # 2. Extract Target Member
         members_map = []
         for m_id in target_team.members:
             u = await User.get(m_id)
-            if u:
-                members_map.append(f"{u.username} (ID: {str(u.id)})")
+            if u: members_map.append(f"{u.username} (ID: {str(u.id)})")
         
-        # B. Identify who to remove
         extraction_prompt = f"""
         User Input: "{state['question']}"
         Team Members: {', '.join(members_map)}
@@ -380,78 +528,66 @@ async def manager_node(state: AgentState):
         Return JSON: {{ "target_id": "..." }}
         If self-referencing or unclear, return "NONE".
         """
+        
         try:
+            # Uses Router Model (No response_format needed, but we use safe extraction)
             completion = await client.chat.completions.create(
-                model=ROUTER_MODEL,
+                model=ROUTER_MODEL, 
                 messages=[{"role": "user", "content": extraction_prompt}]
             )
-            raw = completion.choices[0].message.content
-            clean_json = raw.replace("```json", "").replace("```", "").strip()
-            data = json.loads(clean_json)
-            target_id = data.get("target_id")
+            data = extract_json_safely(completion.choices[0].message.content) or {}
+            target_id = data.get("target_id", "NONE")
         except:
             target_id = "NONE"
 
         if target_id == "NONE" or target_id == user_id:
              return {"final_response": "I couldn't figure out who you want to remove. Please specify a valid member name."}
 
-        # C. Execute Logic
+        # 3. Logic Checks
         if target_id == target_team.members[0]:
              return {"final_response": "❌ You cannot remove the Team Leader."}
 
-        # Scenario 1: Planning Phase (Instant Removal)
-        if target_team.status == "planning":
-            if target_id in target_team.members:
-                target_team.members.remove(target_id)
-                await target_team.save()
-                
-                await Match.find(Match.project_id == str(target_team.id), Match.user_id == target_id).delete()
+        # Check for duplicate active votes
+        existing = next((r for r in target_team.member_requests if r.target_user_id == target_id and r.is_active), None)
+        if existing:
+            return {"final_response": f"⚠️ A vote to remove <@{target_id}> is already active."}
+
+        # 4. START VOTE (The Only Path Now)
+        # We removed the 'planning' check, so this runs for everyone.
+        req = MemberRequest(
+            target_user_id=target_id, 
+            type="remove", 
+            explanation="Removed via AI Manager", 
+            initiator_id=user_id, 
+            votes={user_id: "approve"} # Leader automatically votes YES
+        )
+        target_team.member_requests.append(req)
+        await target_team.save()
+        
+        # 5. Notify Team
+        # We exclude the person being removed from the notification loop to avoid conflict,
+        # but the remaining members will see the vote request.
+        count = 0
+        for m_id in target_team.members:
+            if m_id != user_id and m_id != target_id:
                 await Notification(
-                    recipient_id=target_id, 
+                    recipient_id=m_id, 
                     sender_id=user_id, 
-                    message=f"You were removed from project '{target_team.name}'.", 
-                    type="info"
+                    message=f"🗳️ **Vote Started:** Proposal to REMOVE <@{target_id}> from '{target_team.name}'.", 
+                    type="member_request", 
+                    related_id=str(target_team.id)
                 ).insert()
-                
-                return {"final_response": f"👋 **Removed.** I have removed <@{target_id}> from the team immediately since you are still in the planning phase."}
+                count += 1
 
-        # Scenario 2: Active Phase (Vote Required)
-        else:
-            existing = next((r for r in target_team.member_requests if r.target_user_id == target_id and r.is_active), None)
-            if existing:
-                return {"final_response": f"⚠️ A vote to remove <@{target_id}> is already active."}
-
-            # 🔥 UPDATED LOGIC HERE 🔥
-            req = MemberRequest(
-                target_user_id=target_id, 
-                type="remove", 
-                explanation="Removed via AI Manager", 
-                initiator_id=user_id, 
-                votes={} # 1️⃣ Votes started at 0 (No default vote)
-            )
-            target_team.member_requests.append(req)
-            await target_team.save()
-            
-            for m_id in target_team.members:
-                # 2️⃣ Exclude the target user from notifications
-                if m_id != user_id and m_id != target_id:
-                    await Notification(
-                        recipient_id=m_id, 
-                        sender_id=user_id, 
-                        message=f"Vote initiated to REMOVE a member from '{target_team.name}'.", 
-                        type="member_request", 
-                        related_id=str(target_team.id)
-                    ).insert()
-
-            return {"final_response": f"🗳️ **Vote Started.** I've initiated a vote to remove <@{target_id}>. Other members have been notified (Target excluded)."}    
+        return {"final_response": f"🗳️ **Vote Initiated.** I've started a vote to remove <@{target_id}>. {count} other members have been notified."}    
     
     # --- BRANCH E: TRANSFER LEADERSHIP (NEW) ---
     if intent == "TRANSFER_LEADERSHIP":
         # 1. Permission Check
         if target_team.members[0] != user_id:
-             return {"final_response": "❌ Only the **Team Leader** can transfer leadership."}
+             return {"final_response": "❌ Only the **Team Leader** can initiate a leadership transfer."}
 
-        # 2. Extract New Leader
+        # 2. Extract Candidate
         members_map = []
         for m_id in target_team.members:
             u = await User.get(m_id)
@@ -464,70 +600,108 @@ async def manager_node(state: AgentState):
         Who should be the new leader? 
         Return JSON: {{ "target_id": "..." }}
         """
+        
         try:
-            completion = await client.chat.completions.create(model=ROUTER_MODEL, messages=[{"role": "user", "content": extraction_prompt}])
-            clean_json = completion.choices[0].message.content.replace("```json", "").replace("```", "").strip()
-            data = json.loads(clean_json)
-            target_id = data.get("target_id")
-        except: target_id = "NONE"
+            # FIX: REMOVED 'response_format' argument
+            completion = await client.chat.completions.create(
+                model=ROUTER_MODEL, 
+                messages=[{"role": "user", "content": extraction_prompt}]
+            )
+            # Safe Extract (Already in your code, just verify it's there)
+            data = extract_json_safely(completion.choices[0].message.content) or {}
+            target_id = data.get("target_id", "NONE")
+        except: 
+            target_id = "NONE"
 
         if target_id == "NONE" or target_id == user_id:
-             return {"final_response": "I couldn't figure out who you want to transfer leadership to. Please specify a valid team member."}
-        
-        # 3. Perform Transfer
-        if target_id not in target_team.members:
-             return {"final_response": "❌ That user is not in this team."}
+             return {"final_response": "I couldn't figure out who you want to nominate. Please mention a valid team member."}
 
-        # Swap: Remove new leader, Insert at index 0
-        target_team.members.remove(target_id)
-        target_team.members.insert(0, target_id)
+        # 3. Check for Duplicate
+        existing = next((r for r in target_team.member_requests if r.target_user_id == target_id and r.type == "transfer_leadership" and r.is_active), None)
+        if existing:
+            return {"final_response": f"⚠️ A vote to transfer leadership to <@{target_id}> is already active."}
+
+        # 4. Create the Request (Start with 0 Votes)
+        req = MemberRequest(
+            target_user_id=target_id, 
+            type="transfer_leadership", 
+            explanation="Nominated by current Leader via AI", 
+            initiator_id=user_id, 
+            votes={}    # 👈 CHANGE: Starts empty. Leader must vote manually.
+        )
+        target_team.member_requests.append(req)
         await target_team.save()
         
-        # Notify New Leader
-        await Notification(
-            recipient_id=target_id, 
-            sender_id=user_id, 
-            message=f"👑 You have been promoted to Team Leader of '{target_team.name}'!", 
-            type="info"
-        ).insert()
+        # 5. Notify Team (Everyone except the initiator gets a notification)
+        # The initiator (Leader) will see it in their "Pending Votes" dashboard
+        for m_id in target_team.members:
+            if m_id != user_id:
+                await Notification(
+                    recipient_id=m_id, 
+                    sender_id=user_id, 
+                    message=f"👑 **Vote Started:** Proposal to make <@{target_id}> the new Team Leader of '{target_team.name}'.", 
+                    type="member_request", 
+                    related_id=str(target_team.id)
+                ).insert()
         
-        return {"final_response": f"👑 **Leadership Transferred.** <@{target_id}> is now the new Team Leader of **{target_team.name}**."}
+        return {"final_response": f"🗳️ **Vote Initiated.** You have nominated <@{target_id}>. Please go to your dashboard to cast your vote, and wait for the team to decide."}
 
     # --- BRANCH F: ASSIGN TASK ---
     if intent == "ASSIGN_TASK":
-        # A. Fetch Member Names
+        # 1. Build Member List
         members_map = []
         for m_id in target_team.members:
             u = await User.get(m_id)
-            if u:
-                members_map.append(f"{u.username} (ID: {str(u.id)})")
+            if u: members_map.append(f"{u.username} (ID: {str(u.id)})")
         
-        # B. Extract Task Details
+        # 2. Strict Prompt
         task_extraction_prompt = f"""
-        Extract task details from: "{state['question']}"
+        Analyze this request: "{state['question']}"
+        Context: Project "{target_team.name}"
         Team Members: {', '.join(members_map)}
         
-        Return JSON object with fields:
-        - "description": The task description
-        - "assignee_id": The exact ID of the member to assign (pick best match from list, default to user_id if self)
-        - "days": Number of days until deadline (default to 3 if not specified)
+        INSTRUCTIONS:
+        - Extract the task description.
+        - Find the assignee ID. 
+        - If the user says "me", use ID "{user_id}".
+        - If no specific person is named, use ID "{user_id}".
+        - Default deadline is 3 days.
         
-        Example JSON: {{ "description": "Fix bug", "assignee_id": "123", "days": 2 }}
+        OUTPUT FORMAT:
+        Return ONLY valid JSON.
+        {{
+            "description": "...",
+            "assignee_id": "...",
+            "days": 3
+        }}
         """
         
         try:
+            # 1. REMOVED 'response_format' argument to fix the 400 Error
             completion = await client.chat.completions.create(
                 model=MENTOR_MODEL,
                 messages=[{"role": "user", "content": task_extraction_prompt}]
             )
-            raw = completion.choices[0].message.content
-            clean_json = raw.replace("```json", "").replace("```", "").strip()
-            data = json.loads(clean_json)
             
+            raw = completion.choices[0].message.content
+            print(f"DEBUG RAW AI RESPONSE: {raw}") # Keep this for debugging!
+
+            # Use the helper function already in your file
+            data = extract_json_safely(completion.choices[0].message.content)
+            
+            # Safety check in case data is None
+            if not data:
+                raise ValueError("Could not extract valid JSON from AI response")
+            
+            # 3. Handle Assignee Fallback (Safety Check)
+            assignee = data.get("assignee_id")
+            if not assignee or assignee == "null":
+                assignee = user_id # Default to self if AI gets confused
+
             # C. Create Task Object
             new_task = Task(
                 description=data["description"],
-                assignee_id=data["assignee_id"],
+                assignee_id=assignee,
                 deadline=datetime.now() + timedelta(days=int(data.get("days", 3)))
             )
             
@@ -535,139 +709,230 @@ async def manager_node(state: AgentState):
             target_team.tasks.append(new_task)
             await target_team.save()
             
-            # E. Notify Assignee
-            if data["assignee_id"] != user_id:
-                await Notification(
-                    recipient_id=data["assignee_id"],
+            # E. Notify Assignee (if not self)
+            if assignee != user_id:
+                 await Notification(
+                    recipient_id=assignee,
                     sender_id=user_id,
                     message=f"New AI Task in {target_team.name}: {data['description']}",
                     type="info",
                     related_id=str(target_team.id)
                 ).insert()
 
-            return {"final_response": f"✅ **Task Assigned!**\n\n📝 **{data['description']}**\n👤 Assignee: <@{data['assignee_id']}>\n📅 Deadline: {new_task.deadline.strftime('%Y-%m-%d')}"}
+            return {"final_response": f"✅ **Task Assigned!**\n\n📝 **{data['description']}**\n👤 Assignee: <@{assignee}>\n📅 Deadline: {new_task.deadline.strftime('%Y-%m-%d')}"}
             
+        except json.JSONDecodeError:
+            print(f"JSON Parse Failed. Raw output: {raw}")
+            return {"final_response": "I couldn't create the task. The AI response wasn't valid JSON."}
         except Exception as e:
             print(f"Task Error: {e}")
-            return {"final_response": "I understood the project, but failed to parse the task details. Try: 'Assign [Task] to [Person] in [Project]'."}
-
+            return {"final_response": "Something went wrong while creating the task."}       
+         
     # --- BRANCH G: EXTEND DEADLINE ---
     if intent == "EXTEND_DEADLINE":
-        # 1. Identify Task and New Date
-        tasks_list = [f"Desc: {t.description} | ID: {str(t.id)}" for t in target_team.tasks]
-        
+        # 1. Filter: Only LATE tasks assigned to THIS USER
+        tasks_map = []
+        current_time = datetime.now()
+
+        for t in target_team.tasks:
+            # Check 1: Is it Late?
+            # Check 2: Is it mine?
+            status_label = "(LATE)" if t.deadline < current_time else ""
+            tasks_map.append(f"ID: {str(t.id)} | Task: {t.description} | Due: {t.deadline.strftime('%Y-%m-%d')} {status_label}")        
+        # If list is empty, give specific feedback
+        if not tasks_map:
+             return {"final_response": "❌ You have no **overdue** tasks in this project. You can only request extensions for tasks that are already late."}
+
+        # 2. Strict Prompt
         extraction_prompt = f"""
-        User Input: "{state['question']}"
-        Available Tasks: {json.dumps(tasks_list)}
+        Analyze this request: "{state['question']}"
+        Available Overdue Tasks: {json.dumps(tasks_map)}
         
-        Identify which task the user wants to extend and how many EXTRA days.
-        Return JSON: {{ "task_description": "Exact text from list", "days_to_add": 3 }}
+        INSTRUCTIONS:
+        - Identify which task (ID) the user wants to extend.
+        - Determine how many EXTRA days to add (Default to 3 if not specified).
+        
+        OUTPUT FORMAT:
+        Return ONLY valid JSON.
+        {{
+            "task_id": "Exact ID from list",
+            "days_to_add": 3
+        }}
         """
+        
         try:
-            completion = await client.chat.completions.create(model=MENTOR_MODEL, messages=[{"role": "user", "content": extraction_prompt}])
-            clean_json = completion.choices[0].message.content.replace("```json", "").replace("```", "").strip()
-            data = json.loads(clean_json)
-            target_desc = data.get("task_description")
-            days = int(data.get("days_to_add", 3))
-        except: 
-            return {"final_response": "I couldn't figure out which task you want to extend. Please say something like 'Extend the Login Page task by 2 days'."}
-
-        # 2. Find the Task Object
-        target_task = next((t for t in target_team.tasks if t.description == target_desc), None)
-        if not target_task:
-             return {"final_response": f"❌ I couldn't find the task '{target_desc}' in this project."}
-
-        # 3. SECURITY: Only Assignee can request extension
-        if target_task.assignee_id != user_id:
-             return {"final_response": f"🚫 **Access Denied.** You can only request extensions for tasks assigned to **YOU**. This task belongs to <@{target_task.assignee_id}>."}
-
-        # 4. Check Pending Requests
-        if any(r for r in target_team.extension_requests if r.task_id == str(target_task.id) and r.is_active):
-             return {"final_response": "⚠️ There is already an active extension request for this task."}
-
-        # 5. Logic: Solo vs Team
-        new_deadline = target_task.deadline + timedelta(days=days)
-
-        if len(target_team.members) == 1:
-            # Instant update for solo
-            target_task.deadline = new_deadline
-            await target_team.save()
-            return {"final_response": f"✅ **Deadline Extended.** The new deadline for '{target_task.description}' is {new_deadline.strftime('%Y-%m-%d')}."}
-        else:
-            # Vote for Team
-            req = ExtensionRequest(
-                task_id=str(target_task.id),
-                requested_deadline=new_deadline,
-                reason="Requested via AI Chat",
-                initiator_id=user_id,
-                votes={}
+            # 3. Call AI (Using Safe Extraction)
+            completion = await client.chat.completions.create(
+                model=MENTOR_MODEL,
+                messages=[{"role": "user", "content": extraction_prompt}]
             )
-            target_team.extension_requests.append(req)
-            await target_team.save()
-
-            # Notify Team
-            for m_id in target_team.members:
-                if m_id != user_id:
-                    await Notification(
-                        recipient_id=m_id, 
-                        sender_id=user_id, 
-                        message=f"Vote to EXTEND deadline for task '{target_task.description}'.", 
-                        type="extension_request", 
-                        related_id=str(target_team.id)
-                    ).insert()
             
-            return {"final_response": f"🗳️ **Vote Started.** You requested {days} extra days. Team members have been notified to vote."}
+            data = extract_json_safely(completion.choices[0].message.content)
+            
+            if not data or "task_id" not in data:
+                raise ValueError("JSON parse failed or missing task_id")
 
+            target_id = data["task_id"]
+            days = int(data.get("days_to_add", 3))
+
+            # 4. Find Task Object
+            # We need the index to update the actual object in the list
+            task_index = next((i for i, t in enumerate(target_team.tasks) if str(t.id) == target_id), -1)
+            
+            if task_index == -1:
+                 return {"final_response": "❌ I couldn't find that task in your overdue list."}
+            
+            target_task = target_team.tasks[task_index]
+
+            # 5. Check Active Requests (Inside the Task object!)
+            if target_task.extension_request and target_task.extension_request.is_active:
+                 return {"final_response": "⚠️ You already have a pending extension request for this task."}
+
+            # 6. Logic: Solo vs Team
+            new_deadline = target_task.deadline + timedelta(days=days)
+
+            # A. Solo Project or Majority Threshold is 1 (Instant Approval)
+            threshold = (len(target_team.members) // 2) + 1
+            if len(target_team.members) == 1 or threshold <= 1:
+                target_task.deadline = new_deadline
+                target_task.was_extended = True
+                target_task.warning_sent = False # Reset warning
+                target_team.tasks[task_index] = target_task # Update list
+                await target_team.save()
+                return {"final_response": f"✅ **Deadline Extended.** The new deadline for '{target_task.description}' is {new_deadline.strftime('%Y-%m-%d')}."}
+            
+            # B. Team Project (Start Vote)
+            else:
+                req = ExtensionRequest(
+                    is_active=True,
+                    requested_deadline=new_deadline,
+                    initiator_id=user_id,
+                    votes={user_id: "approve"} # You auto-vote yes
+                )
+                
+                # SAVE TO THE TASK (Not the Team)
+                target_task.extension_request = req
+                target_team.tasks[task_index] = target_task # Update list
+                await target_team.save()
+
+                # Notify Team
+                for m_id in target_team.members:
+                    if m_id != user_id:
+                        await Notification(
+                            recipient_id=m_id, 
+                            sender_id=user_id, 
+                            message=f"⏳ **Extension Request:** {days} extra days for overdue task '{target_task.description}'.", 
+                            type="extension_request", 
+                            related_id=str(target_team.id)
+                        ).insert()
+                
+                return {"final_response": f"🗳️ **Vote Started.** You requested {days} extra days for '{target_task.description}'. Since it is late, your team must approve this."}
+
+        except Exception as e:
+            print(f"Extension Error: {e}")
+            return {"final_response": "I couldn't process the extension request. Please try again."}
+   
+    # --- BRANCH H: SEND MESSAGE (ROBUST) ---
     if intent == "SEND_MESSAGE":
-        # 1. Permission Check (Leader Only)
+        # 1. Permission Check
         if target_team.members[0] != user_id:
-             return {"final_response": "❌ Only the **Team Leader** can send notifications to the team."}
+             return {"final_response": "❌ Only the **Team Leader** can send notifications."}
 
-        # 2. Get Members for Prompt
-        members_map = []
+        # 2. Build Context Maps
+        id_to_name = {}
+        name_to_id = {}
+        members_list_str = []
+        
         for m_id in target_team.members:
             u = await User.get(m_id)
-            if u: members_map.append(f"{u.username} (ID: {str(u.id)})")
+            if u: 
+                id_to_name[str(u.id)] = u.username
+                name_to_id[u.username.lower()] = str(u.id)
+                members_list_str.append(f"{u.username} (ID: {str(u.id)})")
 
-        # 3. AI Extraction
+        # 3. FEW-SHOT PROMPT (The Solution)
         extraction_prompt = f"""
-        User Input: "{state['question']}"
-        Current Project Context: "{target_team.name}"
-        Team Members: {', '.join(members_map)}
+        Analyze this request: "{state['question']}"
+        Current Project: "{target_team.name}"
+        Team Members: {', '.join(members_list_str)}
         
-        Task: Identify the recipient and the message.
-        - The user might mention the project (e.g., "in {target_team.name}"), IGNORE that in the message text.
-        - If sending to everyone/team/all -> recipient_id = "ALL"
-        - If sending to one person -> recipient_id = "Specific ID from list"
+        [EXAMPLES]
+        Input: "Tell Julia from Tic-Tac-Toe that the meeting is at 5"
+        Output: {{ "recipient_id": "ID_OF_JULIA", "message": "The meeting is at 5" }}
         
-        Return JSON: {{ "recipient_id": "...", "message": "..." }}
-        """
-        try:
-            completion = await client.chat.completions.create(model=MENTOR_MODEL, messages=[{"role": "user", "content": extraction_prompt}])
-            clean_json = completion.choices[0].message.content.replace("```json", "").replace("```", "").strip()
-            data = json.loads(clean_json)
-            recipient_id = data.get("recipient_id")
-            message_text = data.get("message")
-        except: 
-            return {"final_response": "I couldn't figure out who to message. Try 'Tell John to...' or 'Tell everyone...'"}
+        Input: "Message everyone in Maze Solver to check emails"
+        Output: {{ "recipient_id": "ALL", "message": "Check emails" }}
 
-        # 4. Logic
-        if recipient_id == "ALL":
-            # Broadcast to Everyone
+        [YOUR TASK]
+        - Identify the recipient and message.
+        - IGNORE the project name in the "from" or "in" clause.
+        - If sending to everyone -> recipient_id = "ALL"
+        - If sending to a person -> recipient_id = "THEIR EXACT ID"
+        
+        OUTPUT (JSON ONLY):
+        """
+        
+        try:
+            # FIX: REMOVED 'response_format' argument here!
+            completion = await client.chat.completions.create(
+                model=MENTOR_MODEL,
+                messages=[{"role": "user", "content": extraction_prompt}]
+            )
+            
+            # Debugging: Print what the AI actually said
+            print(f"🕵️ AI Raw Output: {completion.choices[0].message.content}")
+            
+            # Safe Extract (Already correct in your code)
+            data = extract_json_safely(completion.choices[0].message.content) or {}
+            raw_recipient = data.get("recipient_id")
+            message_text = data.get("message")
+            
+            if not raw_recipient or not message_text:
+                raise ValueError("Missing data")
+
+        except Exception as e: 
+            print(f"❌ Extraction Failed: {e}")
+            return {"final_response": "I couldn't figure out who to message. Try 'Tell John to...'"}
+
+        # 4. SMART RESOLUTION (Logic remains the same)
+        final_recipient_id = None
+        
+        if raw_recipient.upper() == "ALL":
+            final_recipient_id = "ALL"
+        elif raw_recipient in target_team.members:
+            final_recipient_id = raw_recipient
+        elif raw_recipient.lower() in name_to_id:
+            final_recipient_id = name_to_id[raw_recipient.lower()]
+        else:
+            # Fuzzy Match
+            for name, real_id in name_to_id.items():
+                if raw_recipient.lower() in name:
+                    final_recipient_id = real_id
+                    break
+
+        if not final_recipient_id:
+             return {"final_response": f"❌ I found the message, but I can't find a member named '**{raw_recipient}**' in this team."}
+
+        # 5. Execute Send
+        if final_recipient_id == "ALL":
             count = 0
             for m_id in target_team.members:
                 if m_id != user_id:
-                    await Notification(recipient_id=m_id, sender_id=user_id, message=f"📢 **Announcement:** {message_text}", type="info", related_id=str(target_team.id)).insert()
+                    await Notification(
+                        recipient_id=m_id, sender_id=user_id, 
+                        message=f"📢 **Announcement:** {message_text}", 
+                        type="info", related_id=str(target_team.id)
+                    ).insert()
                     count += 1
             return {"final_response": f"📢 **Broadcast Sent.** Notified {count} members: *\"{message_text}\"*"}
-        
         else:
-            # Send to One Person
-            if recipient_id not in target_team.members:
-                 return {"final_response": "❌ That user is not in this team."}
-            
-            await Notification(recipient_id=recipient_id, sender_id=user_id, message=f"📩 **Message from Leader:** {message_text}", type="info", related_id=str(target_team.id)).insert()
-            return {"final_response": f"📩 **Message Sent.** Sent to <@{recipient_id}>: *\"{message_text}\"*"}
+            recipient_name = id_to_name.get(final_recipient_id, "Member")
+            await Notification(
+                recipient_id=final_recipient_id, sender_id=user_id, 
+                message=f"📩 **Message from Leader:** {message_text}", 
+                type="info", related_id=str(target_team.id)
+            ).insert()
+            return {"final_response": f"📩 **Message Sent.** Sent to **{recipient_name}**: *\"{message_text}\"*"}
 
     if intent == "ANALYZE_TEAM":
         needed = set([s.lower() for s in target_team.needed_skills])
@@ -774,13 +1039,114 @@ async def search_node(state: AgentState):
 
 async def chat_node(state: AgentState):
     """
-    Handles General Conversation.
-    Uses the history ALREADY loaded in state['history'].
+    Handles General Conversation + Project Q&A.
+    Uses VECTOR SEARCH to detect if the user wants to see their project list.
     """
     print("🤖 Chat Node Active (Mentor Mode)")
     
     user_id = state["user_id"]
-    user_skills = state["user_skills"]
+    question = state["question"]
+    
+    # 1. Fetch User's Teams (Context)
+    try:
+        user_teams = await Team.find(Team.members == user_id).to_list()
+    except:
+        user_teams = []
+    
+    # 2. Analyze Request (The Smart Way)
+    
+    # A. Check for Specific Project (e.g., "Tell me about Maze Solver")
+    # (This uses the smart helper we built earlier)
+    mentioned_project = await find_relevant_project(question, user_teams)
+
+    # B. Check for General "My Projects" Query (SEMANTIC MATCH)
+    # instead of keywords, we compare meanings.
+    # We define a few "anchor" sentences that represent this intent.
+    general_anchors = [
+        "what are my ongoing projects",
+        "show me my project list",
+        "what am I working on right now",
+        "list my active teams",
+        "tell me about my projects"
+    ]
+    
+    # Calculate similarity against these anchors
+    user_vec = generate_embedding(question)
+    max_score = 0.0
+    
+    for anchor in general_anchors:
+        anchor_vec = generate_embedding(anchor)
+        score = calculate_similarity(user_vec, anchor_vec)
+        if score > max_score:
+            max_score = score
+            
+    # Threshold: 0.6 (60% similarity is usually a safe bet for "same meaning")
+    is_general_query = max_score > 0.60
+    
+    # Debugging print to help you see the score
+    if is_general_query:
+        print(f"🎯 Detected Project List Request (Score: {max_score:.2f})")
+
+    project_context = ""
+    
+    # --- SCENARIO 1: Specific Project ---
+    if mentioned_project:
+        print(f"💡 Context Injection: Found project '{mentioned_project.name}'")
+        
+        # 🔥 FIX: Use 'project_roadmap' instead of 'roadmap'
+        # Handle cases where it might be a Dict, a List, or None
+        roadmap_data = getattr(mentioned_project, "project_roadmap", None)
+        roadmap_summary = "None"
+        
+        if roadmap_data:
+            # If it's a list (legacy data), slice it. If it's a dict (model definition), dump it.
+            if isinstance(roadmap_data, list):
+                roadmap_summary = json.dumps(roadmap_data[:3])
+            elif isinstance(roadmap_data, dict):
+                # Try to get 'steps' or just dump the first few keys
+                steps = roadmap_data.get("roadmap", roadmap_data.get("steps", []))
+                if isinstance(steps, list):
+                    roadmap_summary = json.dumps(steps[:3])
+                else:
+                    roadmap_summary = json.dumps(roadmap_data) # Fallback
+
+        project_context = f"""
+        --- ACTIVE PROJECT CONTEXT ---
+        The user is asking about their project: "{mentioned_project.name}"
+        Description: {mentioned_project.description}
+        Tech Stack / Skills: {', '.join(mentioned_project.needed_skills)}
+        Status: {mentioned_project.status}
+        Pending Tasks: {len(mentioned_project.tasks)}
+        Roadmap (Snapshot): {roadmap_summary}
+        
+        INSTRUCTION: Answer the user's question specifically using the project details above.
+        ------------------------------
+        """
+
+    # --- SCENARIO 2: List All Projects ---
+    elif is_general_query and user_teams:
+        print(f"💡 Context Injection: Listing {len(user_teams)} Projects")
+        
+        summary_list = []
+        for t in user_teams:
+            summary_list.append(f"- {t.name}: {t.description} (Stack: {', '.join(t.needed_skills)})")
+        
+        project_context = f"""
+        --- USER'S PROJECT LIST ---
+        The user wants to know about their ongoing projects. Here they are:
+        
+        {chr(10).join(summary_list)}
+        
+        INSTRUCTION: Summarize these projects for the user. Tell them exactly what they are working on currently.
+        ---------------------------
+        """
+        
+    elif is_general_query and not user_teams:
+        project_context = """
+        --- NO PROJECTS FOUND ---
+        The user asked for their projects, but they haven't joined any teams yet.
+        INSTRUCTION: Kindly tell them they don't have any active projects and suggest they visit the Marketplace to join one.
+        """
     
     # --- 1. DEFINE THE KNOWLEDGE BASE ---
     platform_guide = """
@@ -816,33 +1182,28 @@ async def chat_node(state: AgentState):
 
     system_instruction = f"""
     You are CollabQuest Mentor Bot.
-    User Context: ID {user_id}, Skills: {", ".join(user_skills) if user_skills else "Beginner"}
+    User Context: ID {user_id}
+    
+    {project_context} 
+    
     {platform_guide}
+    
     INSTRUCTIONS:
-    - If user asks about Platform, use the Manual.
-    - If user asks for code, provide it.
+    - If project context is provided above (Specific or List), USE IT to answer.
+    - If no context, use the Platform Manual.
     """
     
-    # --- 2. USE EXISTING HISTORY (No DB Call!) ---
-    # Start with System Prompt
+    # 4. Generate Reply
     messages_payload = [{"role": "system", "content": system_instruction}]
-    
-    # Add History from State (This comes from generate_chat_reply)
     if state.get("history"):
         messages_payload.extend(state["history"])
-        
-    # Add Current Question
     messages_payload.append({"role": "user", "content": state["question"]})
 
-    # --- 3. GENERATE REPLY ---
     try:
         completion = await client.chat.completions.create(
             model=MENTOR_MODEL,
             messages=messages_payload,
-            extra_headers={
-                "HTTP-Referer": "https://collabquest.com",
-                "X-Title": "CollabQuest"
-            }
+            extra_headers={"HTTP-Referer": "https://collabquest.com", "X-Title": "CollabQuest"}
         )
         return {"final_response": completion.choices[0].message.content}
     except Exception as e:
