@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useSearchParams } from "next/navigation";
 import {
   ArrowRight,
   Users,
@@ -10,6 +11,8 @@ import {
   Zap,
   CheckCircle,
   X,
+  Star,
+  Clock,
 } from "lucide-react";
 import api from "@/lib/api";
 
@@ -19,12 +22,21 @@ interface OnboardingStep {
   description: string;
   icon: React.ReactNode;
   highlight?: string;
+  selectorId?: string; // ID of the element to highlight on the page
 }
 
 export default function OnboardingTutorial() {
   const [currentStep, setCurrentStep] = useState(0);
   const [isVisible, setIsVisible] = useState(false);
   const [isCompleting, setIsCompleting] = useState(false);
+  const [highlightPos, setHighlightPos] = useState<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const searchParams = useSearchParams();
+  const forceShowOnboarding = searchParams.get("showOnboarding") === "true";
 
   const steps: OnboardingStep[] = [
     {
@@ -41,6 +53,7 @@ export default function OnboardingTutorial() {
         "Use the Find Team feature to discover teammates with matching skills and interests. Browse profiles and connect with collaborators.",
       icon: <Search className="w-12 h-12 text-purple-400" />,
       highlight: "find-team",
+      selectorId: "onboarding-find-team",
     },
     {
       id: 3,
@@ -49,6 +62,7 @@ export default function OnboardingTutorial() {
         "Create and manage your projects in the Projects section. Define your team structure, set milestones, and track progress.",
       icon: <Users className="w-12 h-12 text-green-400" />,
       highlight: "myproject",
+      selectorId: "onboarding-projects",
     },
     {
       id: 4,
@@ -57,12 +71,31 @@ export default function OnboardingTutorial() {
         "Use the Chat feature to communicate with your team members. Stay connected and share ideas in real-time.",
       icon: <MessageSquare className="w-12 h-12 text-pink-400" />,
       highlight: "chat",
+      selectorId: "onboarding-chat",
     },
     {
       id: 5,
+      title: "Save Your Favorites",
+      description:
+        "Use the Saved feature to bookmark teams and projects you're interested in. Build your personalized collection of favorites.",
+      icon: <Star className="w-12 h-12 text-yellow-400" />,
+      highlight: "saved",
+      selectorId: "onboarding-saved",
+    },
+    {
+      id: 6,
+      title: "Track Your Activity",
+      description:
+        "Check your History to see all your past interactions, applications, and collaborations. Keep track of your journey on CollabQuest.",
+      icon: <Clock className="w-12 h-12 text-orange-400" />,
+      highlight: "history",
+      selectorId: "onboarding-history",
+    },
+    {
+      id: 7,
       title: "You're All Set!",
       description:
-        "You now have access to all CollabQuest features. Start exploring and find amazing teammates to build with!",
+        "You now have access to all CollabQuest features. Start exploring, find amazing teammates, and build incredible projects together!",
       icon: <CheckCircle className="w-12 h-12 text-emerald-400" />,
     },
   ];
@@ -72,7 +105,10 @@ export default function OnboardingTutorial() {
     const checkOnboarding = async () => {
       try {
         const response = await api.get("/auth/profile");
-        if (!response.data.is_onboarded) {
+        // Show tutorial if:
+        // 1. User hasn't completed onboarding OR
+        // 2. Developer has ?showOnboarding=true in URL (for testing)
+        if (!response.data.is_onboarded || forceShowOnboarding) {
           setIsVisible(true);
         }
       } catch (error) {
@@ -81,7 +117,34 @@ export default function OnboardingTutorial() {
     };
 
     checkOnboarding();
-  }, []);
+  }, [forceShowOnboarding]);
+
+  // Update highlight position when step changes
+  useEffect(() => {
+    const updateHighlightPosition = () => {
+      const step = steps[currentStep];
+      if (step?.selectorId) {
+        const element = document.getElementById(step.selectorId);
+        if (element) {
+          const rect = element.getBoundingClientRect();
+          setHighlightPos({
+            x: rect.left,
+            y: rect.top,
+            width: rect.width,
+            height: rect.height,
+          });
+        } else {
+          setHighlightPos(null);
+        }
+      } else {
+        setHighlightPos(null);
+      }
+    };
+
+    updateHighlightPosition();
+    window.addEventListener("resize", updateHighlightPosition);
+    return () => window.removeEventListener("resize", updateHighlightPosition);
+  }, [currentStep]);
 
   const handleNext = () => {
     if (currentStep < steps.length - 1) {
@@ -125,18 +188,38 @@ export default function OnboardingTutorial() {
   return (
     <AnimatePresence>
       {isVisible && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50"
-        >
+        <>
+          {/* Spotlight Overlay */}
           <motion.div
-            initial={{ scale: 0.9, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            exit={{ scale: 0.9, opacity: 0 }}
-            className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-xl shadow-2xl max-w-md w-full mx-4 border border-slate-700"
+            className="fixed inset-0 z-40"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              background:
+                highlightPos &&
+                `radial-gradient(
+                  circle ${Math.max(highlightPos.width, highlightPos.height) / 2 + 40}px at ${highlightPos.x + highlightPos.width / 2}px ${highlightPos.y + highlightPos.height / 2}px,
+                  transparent 0%,
+                  rgba(0, 0, 0, 0.85) 100%
+                )`,
+            }}
+            transition={{ duration: 0.3 }}
+          />
+
+          {/* Modal */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 flex items-center justify-center z-50 pointer-events-none"
           >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-xl shadow-2xl max-w-md w-full mx-4 border border-slate-700 pointer-events-auto"
+            >
             {/* Header */}
             <div className="relative h-2 bg-slate-700 rounded-t-xl overflow-hidden">
               <motion.div
@@ -227,9 +310,33 @@ export default function OnboardingTutorial() {
                 Skip tutorial
               </button>
             </div>
+            </motion.div>
           </motion.div>
-        </motion.div>
-      )}
+
+          {/* Highlighted Element Border */}
+          {highlightPos && (
+            <motion.div
+              className="fixed border-2 border-cyan-400 rounded-lg pointer-events-none z-50"
+              style={{
+                left: highlightPos.x - 8,
+                top: highlightPos.y - 8,
+                width: highlightPos.width + 16,
+                height: highlightPos.height + 16,
+              }}
+              animate={{
+                boxShadow: [
+                  "0 0 0 2px rgba(34, 211, 238, 0.3), 0 0 20px rgba(34, 211, 238, 0.5)",
+                  "0 0 0 8px rgba(34, 211, 238, 0.2), 0 0 30px rgba(34, 211, 238, 0.7)",
+                  "0 0 0 2px rgba(34, 211, 238, 0.3), 0 0 20px rgba(34, 211, 238, 0.5)",
+                ],
+              }}
+              transition={{
+                duration: 2,
+                repeat: Infinity,
+              }}
+            />
+          )}
+        </>      )}
     </AnimatePresence>
   );
 }
