@@ -33,7 +33,7 @@ interface Team {
 
 interface TaskItem {
     id: string; description: string; assignee_id: string; assignee_name: string; assignee_avatar: string; deadline: string;
-    status: "pending" | "review" | "completed" | "rework"; 
+    status: "pending" | "review" | "completed" | "rework";
     verification_votes: number; required_votes: number; rework_votes: number; required_rework: number; is_overdue: boolean;
     extension_active: boolean; extension_votes: number; extension_required: number; was_extended: boolean;
     extension_requested_date?: string;
@@ -139,7 +139,7 @@ export default function TeamDetails() {
     const handleStartProject = async () => { if (!confirm("Start the project? This enables task management.")) return; try { await api.put(`/teams/${teamId}`, { status: "active" }); fetchTeamData(); } catch (e) { } }
     const handleLeave = () => { setActionType("leave"); setExplanation(""); setShowExplainModal(true); };
     const handleRemove = (memberId: string) => { setActionType("remove"); setActionTargetId(memberId); setExplanation(""); setShowExplainModal(true); };
-    
+
     const handleConfirmAction = async () => {
         if (!explanation.trim()) return alert("Explanation required.");
         try {
@@ -156,7 +156,7 @@ export default function TeamDetails() {
     };
 
     const handleVoteRequest = async (reqId: string, decision: 'approve' | 'reject') => { try { await api.post(`/teams/${teamId}/member-request/${reqId}/vote`, { decision }); fetchTeamData(); } catch (e) { } };
-    
+
     const handleAssignTask = async () => {
         if (!newTaskDesc || !newTaskAssignee || !newTaskDeadline) return alert("Fill all fields");
         setIsTaskLoading(true);
@@ -170,7 +170,7 @@ export default function TeamDetails() {
     const handleVerifyTask = async (taskId: string) => { try { await api.post(`/teams/${teamId}/tasks/${taskId}/verify`, {}); fetchTasks(); } catch (e) { } };
     const handleReworkTask = async (taskId: string) => { try { await api.post(`/teams/${teamId}/tasks/${taskId}/rework`, {}); fetchTasks(); } catch (e) { } };
     const handleSubmitTask = async (taskId: string) => { try { await api.post(`/teams/${teamId}/tasks/${taskId}/submit`, {}); fetchTasks(); } catch (e) { } };
-    
+
     const openExtensionModal = (taskId: string) => { setExtensionTaskId(taskId); setExtensionDate(""); setShowExtensionModal(true); };
     const confirmExtensionRequest = async () => {
         if (!extensionDate || !extensionTaskId) return alert("Select a date.");
@@ -181,7 +181,7 @@ export default function TeamDetails() {
     };
 
     const handleVoteExtension = async (taskId: string, decision: 'approve' | 'reject') => { try { await api.post(`/teams/${teamId}/tasks/${taskId}/extend/vote`, { decision }); fetchTasks(); } catch (e) { } }
-    
+
     const handleInitiateDelete = async () => {
         if (!confirm("Start vote?")) return;
         setDeletionProcessing(true);
@@ -236,21 +236,69 @@ export default function TeamDetails() {
     const likeProject = async () => { try { await api.post("/matches/swipe", { target_id: teamId, direction: "right", type: "project", related_id: teamId }); if (team) setTeam({ ...team, has_liked: true }); window.dispatchEvent(new Event("dashboardUpdate")); } catch (err) { } }
     const openEmailComposer = (u: any) => { setEmailRecipient({ id: u.id, name: u.username || u.name }); setShowEmailModal(true); }
     const handleSendEmail = async () => { if (!emailRecipient) return; try { await api.post("/communication/send-email", { recipient_id: emailRecipient.id, subject: emailSubject, body: emailBody }); setShowEmailModal(false); } catch (err) { } }
-    
+
     const addSkill = (skill: string) => { if (!localSkills.includes(skill)) setLocalSkills([...localSkills, skill]); setDropdownValue(""); };
     const removeSkill = (skill: string) => { setLocalSkills(localSkills.filter(s => s !== skill)); };
     const saveSkills = async () => { try { await api.put(`/teams/${teamId}/skills`, { needed_skills: localSkills }); fetchTeamData(); setIsEditingSkills(false); setSuggestions(null); } catch (err) { } };
-    
+
     const askAiForStack = async () => {
-        setIsSuggesting(true); setSuggestions(null);
+        // 1. FRONTEND VALIDATION
+        const descToCheck = team?.description || "";
+        
+        if (!descToCheck.trim()) {
+            alert("⚠️ Missing Description\nPlease add a project description so the AI knows what to suggest.");
+            return;
+        }
+
+        // 2. API CALL
+        setIsSuggesting(true); 
+        setSuggestions(null);
         try {
-            const res = await api.post("/teams/suggest-stack", { description: team?.description || "", current_skills: localSkills });
-            if (res.data && (res.data.add.length > 0 || res.data.remove.length > 0)) setSuggestions(res.data);
-        } catch (err) { console.error(err); } finally { setIsSuggesting(false); }
+            const res = await api.post("/teams/suggest-stack", { 
+                description: descToCheck, 
+                current_skills: localSkills 
+            });
+            if (res.data && (res.data.add.length > 0 || res.data.remove.length > 0)) {
+                setSuggestions(res.data);
+            }
+        } catch (err: any) { 
+            // 3. BACKEND VALIDATION HANDLER
+            // We get the specific error message from the backend (e.g., "Description is too vague")
+            const msg = err.response?.data?.detail || "AI Suggestion failed.";
+            alert(msg);
+            
+            // REMOVED: console.error(err); 
+            // This prevents the "Request failed with status code 400" from cluttering your console.
+        } finally { 
+            setIsSuggesting(false); 
+        }
     };
 
     const acceptSuggestion = (type: 'add' | 'remove', skill: string) => { if (type === 'add') addSkill(skill); if (type === 'remove') removeSkill(skill); if (suggestions) setSuggestions({ ...suggestions, [type]: suggestions[type].filter(s => s !== skill) }); };
-    const generateRoadmap = async () => { setIsGenerating(true); try { await api.post(`/teams/${teamId}/roadmap`, {}); fetchTeamData(); } catch (err) { } finally { setIsGenerating(false); } };
+    const generateRoadmap = async () => {
+        // 1. VALIDATION
+        if (!team?.description?.trim()) {
+            alert("⚠️ Missing Description\nPlease add a detailed project description to generate a roadmap.");
+            return; // Stops the request
+        }
+        if (!team?.needed_skills || team.needed_skills.length === 0) {
+            alert("⚠️ Missing Tech Stack\nPlease add at least one skill/tool to your Tech Stack first.");
+            return; // Stops the request
+        }
+
+        // 2. API CALL
+        setIsGenerating(true);
+        try {
+            await api.post(`/teams/${teamId}/roadmap`, {});
+            fetchTeamData();
+        } catch (err: any) {
+            // Show backend error if AI fails (e.g., "Irrelevant description")
+            const msg = err.response?.data?.detail || "Roadmap generation failed.";
+            alert(msg);
+        } finally {
+            setIsGenerating(false);
+        }
+    };
 
     if (loading || !team) return <div className="flex h-screen items-center justify-center bg-gray-950 text-white"><Loader2 className="animate-spin" /></div>;
 

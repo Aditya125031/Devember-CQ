@@ -560,17 +560,32 @@ async def update_team_skills(team_id: str, data: SkillsUpdate, current_user: Use
 @router.post("/suggest-stack")
 async def get_stack_suggestions(request: SuggestionRequest, current_user: User = Depends(get_current_user)):
     suggestions = await suggest_tech_stack(request.description, request.current_skills)
+    
+    # Check for AI validation error
+    if suggestions and "error" in suggestions:
+        raise HTTPException(status_code=400, detail=suggestions["error"])
+        
     return suggestions
 
 @router.post("/{team_id}/roadmap")
 async def create_team_roadmap(team_id: str, current_user: User = Depends(get_current_user)):
     team = await Team.get(team_id)
     if not team or str(current_user.id) != team.members[0]: raise HTTPException(403)
+    
     weeks = 4
     if team.target_completion_date:
         delta = team.target_completion_date - datetime.now(team.target_completion_date.tzinfo)
         weeks = max(1, round(delta.days / 7))
+        
     ai_plan = await generate_roadmap(team.description, team.needed_skills, weeks=weeks)
+    
+    if not ai_plan:
+        raise HTTPException(status_code=500, detail="AI Service unavailable. Please try again.")
+
+    # Check for AI validation error
+    if "error" in ai_plan:
+        raise HTTPException(status_code=400, detail=ai_plan["error"])
+        
     team.project_roadmap = ai_plan
     await team.save()
     return team

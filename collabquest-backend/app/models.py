@@ -58,6 +58,7 @@ class Education(BaseModel):
     is_visible: bool = True 
 
 class VisibilitySettings(BaseModel):
+    full_name: bool = True
     linkedin: bool = True
     codeforces: bool = True
     leetcode: bool = True
@@ -104,6 +105,7 @@ class User(Document):
     email: str
     password_hash: Optional[str] = None
     avatar_url: Optional[str] = None
+    full_name: Optional[str] = None
     
     # Trust Score
     trust_score: float = Field(default=5.0)
