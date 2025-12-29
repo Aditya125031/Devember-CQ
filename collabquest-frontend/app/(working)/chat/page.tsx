@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import ChatClient from "./ChatClient";
-
+export const dynamic = "force-dynamic";
 export const metadata = {
   title: "Chat - CollabQuest",
 };
