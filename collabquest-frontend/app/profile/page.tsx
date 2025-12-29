@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Cookies from "js-cookie";
 import api from "@/lib/api";
@@ -24,7 +24,7 @@ interface SocialLink { platform: string; url: string; }
 interface Achievement { title: string; date?: string; description?: string; }
 interface Education { institute: string; course: string; year_of_study: string; is_completed: boolean; is_visible: boolean; }
 
-export default function ProfilePage() {
+function ProfilePage() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const [loading, setLoading] = useState(true);
@@ -712,4 +712,13 @@ export default function ProfilePage() {
             `}</style>
         </div>
     );
+}
+
+export default function ProfilePages() {
+  return (
+    // You can put a loading spinner in the "fallback"
+    <Suspense fallback={<div>Loading chat...</div>}>
+      <ProfilePage />
+    </Suspense>
+  )
 }

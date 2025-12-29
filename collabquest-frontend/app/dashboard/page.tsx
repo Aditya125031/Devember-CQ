@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Cookies from "js-cookie";
 import api from "@/lib/api";
@@ -76,7 +76,7 @@ interface RequestItem {
     created_at: string;
 }
 
-export default function Dashboard() {
+function Dashboard() {
     const searchParams = useSearchParams();
     const router = useRouter();
     const [user, setUser] = useState<UserProfile | null>(null);
@@ -587,4 +587,13 @@ export default function Dashboard() {
             </AnimatePresence>
         </div>
     );
+}
+
+export default function DashboardPage() {
+  return (
+    // You can put a loading spinner in the "fallback"
+    <Suspense fallback={<div>Loading chat...</div>}>
+      <Dashboard/>
+    </Suspense>
+  )
 }
