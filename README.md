@@ -12,6 +12,7 @@ Backend: Python FastAPI, Uvicorn
 
 Database: MongoDB (Beanie ODM)
 
+
 Auth: GitHub OAuth + JWT
 
 ✅ Prerequisites (What you need installed)
