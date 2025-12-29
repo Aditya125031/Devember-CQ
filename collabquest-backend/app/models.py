@@ -28,6 +28,7 @@ class Achievement(BaseModel):
     description: Optional[str] = None
 
 class ConnectedAccounts(BaseModel):
+    github: Optional[str] = None
     linkedin: Optional[str] = None
     codeforces: Optional[str] = None
     leetcode: Optional[str] = None

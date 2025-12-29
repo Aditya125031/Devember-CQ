@@ -8,6 +8,7 @@ from app.auth.utils import (
 )
 from app.models import User, TrustBreakdown
 from app.database import init_db
+from typing import Optional
 import os
 from dotenv import load_dotenv
 
@@ -44,11 +45,10 @@ async def github_login():
 async def link_github(token: str):
     """
     Initiates GitHub OAuth flow for linking an account to an EXISTING user.
-    Passes the current user's JWT as 'state' to persist session across the redirect.
     """
-    try:
-        verify_token(token) # Ensure the user initiating the link is valid
-    except:
+    # FIX: Check if payload is returned, otherwise raise exception
+    payload = verify_token(token)
+    if not payload:
         raise HTTPException(status_code=401, detail="Invalid session")
         
     return RedirectResponse(
@@ -56,7 +56,7 @@ async def link_github(token: str):
     )
 
 @router.get("/callback")
-async def github_callback(code: str):
+async def github_callback(code: str, state: Optional[str] = None):
     token = await get_github_token(code)
     if not token:
         raise HTTPException(status_code=400, detail="GitHub Login Failed")
@@ -67,6 +67,51 @@ async def github_callback(code: str):
         raise HTTPException(status_code=400, detail="Failed to fetch GitHub profile")
 
     github_id_str = str(github_user["id"])
+
+    # --- LINKING FLOW (If state/token is present) ---
+    if state:
+        try:
+            payload = verify_token(state)
+            current_user_id = payload.get("sub")
+            user = await User.get(current_user_id)
+            
+            if user:
+                # 1. Check if this GitHub account is already linked to ANOTHER user
+                conflict = await User.find_one(User.github_id == github_id_str)
+                if conflict and str(conflict.id) != str(user.id):
+                    return RedirectResponse(f"{FRONTEND_URL}/profile?error=github_taken")
+
+                # 2. Link Account
+                user.github_id = github_id_str
+                
+                # 3. Update Connected Accounts
+                if not user.connected_accounts: 
+                    user.connected_accounts = ConnectedAccounts()
+                user.connected_accounts.github = github_user["login"]
+                
+                # 4. Fill Data from GitHub (Only if missing)
+                if not user.avatar_url:
+                    user.avatar_url = github_user["avatar_url"]
+                
+                if not user.full_name and github_user.get("name"):
+                    user.full_name = github_user["name"]
+                    
+                if (not user.about or user.about == "I love building cool things!") and github_user.get("bio"):
+                    user.about = github_user["bio"]
+
+                # 5. Update Stats & Trust Score
+                if not user.platform_stats: 
+                    user.platform_stats = {}
+                user.platform_stats["github"] = github_user
+                
+                await update_trust_score(user)
+                await user.save()
+                
+                return RedirectResponse(f"{FRONTEND_URL}/profile?success=github_linked")
+        except Exception as e:
+            print(f"Linking Error: {e}")
+            traceback.print_exc()
+            return RedirectResponse(f"{FRONTEND_URL}/profile?error=linking_failed")
     
     # Check if user exists in DB
     user = await User.find_one(User.github_id == github_id_str)

@@ -37,6 +37,15 @@ class VisibilityUpdate(BaseModel):
 
 @router.get("/me", response_model=User)
 async def read_users_me(current_user: User = Depends(get_current_user)):
+    # --- AUTO-FIX FOR LEGACY DATA ---
+    # If user has GitHub ID but connected_accounts.github is empty, fix it.
+    if current_user.github_id and (not current_user.connected_accounts or not current_user.connected_accounts.github):
+        if not current_user.connected_accounts:
+            current_user.connected_accounts = ConnectedAccounts()
+        # Use username as fallback for handle if we don't have the specific login saved
+        current_user.connected_accounts.github = current_user.username 
+        await current_user.save()
+    
     return current_user
 
 # --- FAVORITES ---
