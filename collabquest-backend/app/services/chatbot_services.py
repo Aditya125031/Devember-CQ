@@ -17,60 +17,77 @@ from app.services.vector_store import generate_embedding, calculate_similarity
 
 INTENT_EXAMPLES = {
     "CREATE_PROJECT": [
-        "create a new project", "start a team", "post an idea", "build a new app", "launch a startup", "I have an idea for a project"
+        "create a new project", "start a team", "post an idea", "build a new app", 
+        "launch a startup", "I have an idea for a project", "make a group for hackathon",
+        "initialize a new repo", "setup a team space"
     ],
     "DELETE_PROJECT": [
-        "delete this project", "remove this team", "cancel the project", "destroy the group", "delete my project"
+        "delete this project", "remove this team", "cancel the project", "destroy the group", 
+        "delete my project", "erase this workspace", "wipe the project data", "terminate the team"
     ],
     "COMPLETE_PROJECT": [
-        "mark as complete", "finish the project", "we are done", "project is finished", "close the project"
+        "mark as complete", "finish the project", "we are done", "project is finished", 
+        "close the project", "archive this team", "set status to completed", "wrap up this project"
     ],
     "LEAVE_TEAM": [
-        "leave the team", "quit this project", "exit the group", "resign from team", "remove me from this project"
+        "leave the team", "quit this project", "exit the group", "resign from team", 
+        "remove me from this project", "withdraw my membership", "step down from this group"
     ],
     "REMOVE_MEMBER": [
-        "remove a member", "kick someone out", "fire a developer", "ban a user", "remove him from the team"
+        "remove a member", "kick someone out", "fire a developer", "ban a user", 
+        "remove him from the team", "dismiss this person", "boot member from group"
     ],
     "ASSIGN_TASK": [
-        "assign a task", "give a job to someone", "create a to-do item", "delegate this work", "add a task for her"
+        "assign a task", "give a job to someone", "create a to-do item", "delegate this work", 
+        "add a task for her", "create a ticket", "assign this issue to John", "new task: fix bugs"
     ],
     "EXTEND_DEADLINE": [
-        "extend the deadline", "push back the date", "need more time", "change the due date", "postpone the task"
+        "extend the deadline", "push back the date", "need more time", "change the due date", 
+        "postpone the task", "delay the submission", "reschedule the deadline", "add 2 days to the task"
     ],
     "SHOW_TASKS": [
-        "show my tasks", "what do i need to do", "check my todo list", "pending work", "my assignments"
+        "show my tasks", "what do i need to do", "check my todo list", "pending work", 
+        "my assignments", "list my active tickets", "what is on my plate?", "show my deliverables"
     ],
     "DAILY_BRIEFING": [
-        "daily briefing", "what did i miss", "show notifications", "any updates", "summarize my day"
+        "daily briefing", "what did i miss", "show notifications", "any updates", 
+        "summarize my day", "catch me up", "morning report", "show recent activity"
     ],
     "ANALYZE_TEAM": [
-        "analyze the team", "check skill gaps", "what skills are missing", "evaluate our roster", "team analysis"
+        "analyze the team skills", "check skill gaps", "what skills are missing", "evaluate our roster", 
+        "team composition analysis", "do we need more developers?", "assess team balance", "hiring recommendations"
     ],
     "SEND_MESSAGE": [
-        "send a message", "tell the team", "broadcast an announcement", "message him", "notify everyone"
+        "send a message", "tell the team", "broadcast an announcement", "message him", 
+        "notify everyone", "send a dm to Alice", "announcement: meeting starts now"
     ],
     "CODE_REQUEST": [
-        "write python code", "fix this bug", "debug this function", "how do I code this", "generate a script"
+        "write python code", "fix this bug", "debug this function", "how do I code this", 
+        "generate a script", "create a react component", "refactor this code", "explain this error"
     ],
     "SEARCH_REQUEST": [
-        "find a project", "search for teams", "projects using react", "looking for a team to join"
+        "find a project", "search for teams", "projects using react", "looking for a team to join",
+        "search for open source projects", "find a game dev team", "browse active projects"
     ],
     "PROJECT_QUERY": [
-        "show tasks with extended deadlines",
-        "who has the most work?",
-        "which project is falling behind?",
-        "show me all completed tasks",
-        "is anyone overloaded?",
-        "summary of my projects",
-        "what is Alice working on?"
+        "who is overloaded?", "who has too many tasks?", "show tasks with extended deadlines",
+        "who has the most work?", "which project is falling behind?", "show me all completed tasks",
+        "is anyone overloaded in the tic-tac-toe project?", "summary of my projects", 
+        "what is Alice working on?", "task status report", "show team velocity"
     ],
     "GENERAL_QUERY": [
-        "Hello, how are you?", 
-        "tell me about my ongoing projects",  # <--- ADD THIS
-        "what projects am I working on?",     # <--- ADD THIS
-        "list my projects",                   # <--- ADD THIS
-        "who are you?",
-        "what can you do?"
+        # Greetings & Persona
+        "Hello", "Hi", "how are you?", "who are you?", "what can you do?", 
+        
+        # Project List (Informational)
+        "tell me about my ongoing projects", "what projects am I working on?", "list my projects",
+        
+        # "How-To" Instructions (CRITICAL FOR DISAMBIGUATION)
+        "how do I recruit people?", "how to find developers", "where is the recruit page?",
+        "how does the matching work?", "how to create a team", "how do I leave a project?",
+        "explain the voting system", "how do I verify my skills?", "where can I change my avatar?",
+        "recruit developers", "find members", "hire people", "look for candidates", # These act as "How-to" because bot can't swipe for user
+        "swipe on users", "match with people"
     ]
 }
 
@@ -232,39 +249,53 @@ async def router_node(state: AgentState):
     router_prompt = """You are the Intent Classifier for a Project Management AI.
     Classify the user's input into EXACTLY ONE of these categories:
 
-    [CATEGORIES]
-    - CREATE_PROJECT
-    - DELETE_PROJECT
-    - COMPLETE_PROJECT
-    - LEAVE_TEAM
-    - REMOVE_MEMBER
-    - ASSIGN_TASK
-    - EXTEND_DEADLINE
-    - SHOW_TASKS
-    - DAILY_BRIEFING
-    - ANALYZE_TEAM
-    - SEND_MESSAGE
-    - CODE_REQUEST
-    - SEARCH_REQUEST
-    - PROJECT_QUERY
-    - GENERAL_QUERY
+    [ACTION CATEGORIES - The Bot performs these]
+    - CREATE_PROJECT (User wants to make a new team/project)
+    - DELETE_PROJECT (User wants to delete a project)
+    - COMPLETE_PROJECT (User wants to mark a project as finished)
+    - LEAVE_TEAM (User wants to leave a team)
+    - REMOVE_MEMBER (User wants to kick someone)
+    - ASSIGN_TASK (User is creating a specific task)
+    - EXTEND_DEADLINE (User asks for more time on a task)
+    - SHOW_TASKS (User wants to see their todo list)
+    - DAILY_BRIEFING (User wants a summary of notifications)
+    - ANALYZE_TEAM (User asks about skills, hiring gaps, or roster balance)
+    - SEND_MESSAGE (User wants to broadcast/DM someone)
+    - CODE_REQUEST (User asks for code generation or debugging)
+    - SEARCH_REQUEST (User is looking for *Projects* to join)
+    - PROJECT_QUERY (User asks about *Data/Workload* - e.g., "Who is busy?", "Task status")
+
+    [GENERAL/INSTRUCTIONAL - The Bot explains/chats]
+    - GENERAL_QUERY (Greetings, "How-to" questions, or requests the bot CANNOT do like "Recruiting")
+
+    [CRITICAL DISAMBIGUATION RULES]
+    1. **"Recruit" vs "Search":** - If user says "Recruit people", "Find developers", "Hire members" -> GENERAL_QUERY (Bot cannot recruit; it must explain how to use the UI).
+       - If user says "Find a project", "Search for teams" -> SEARCH_REQUEST (Bot CAN search projects).
+
+    2. **"Action" vs "How-To":**
+       - "Create a project" -> CREATE_PROJECT
+       - "How do I create a project?" -> GENERAL_QUERY
+       - "Delete this team" -> DELETE_PROJECT
+       - "How do I delete?" -> GENERAL_QUERY
+
+    3. **"Analyze" vs "Query":**
+       - "What skills are missing?" -> ANALYZE_TEAM
+       - "Who is overloaded?" -> PROJECT_QUERY
 
     [FEW-SHOT EXAMPLES]
     Input: "I want to build a React app" -> CREATE_PROJECT
-    Input: "I'm done with this project" -> COMPLETE_PROJECT
-    Input: "Kick John out of the group" -> REMOVE_MEMBER
-    Input: "Tell everyone the meeting is at 5" -> SEND_MESSAGE
-    Input: "How do I center a div?" -> CODE_REQUEST
-    Input: "Find me a team doing AI" -> SEARCH_REQUEST
+    Input: "How do I recruit members?" -> GENERAL_QUERY
+    Input: "Find me a developer for Python" -> GENERAL_QUERY (Bot can't search people, only projects)
+    Input: "Find me a Python project to join" -> SEARCH_REQUEST
     Input: "Who has the most open tasks?" -> PROJECT_QUERY
-    Input: "Show tasks that have been extended" -> PROJECT_QUERY
+    Input: "Kick John out of the group" -> REMOVE_MEMBER
     Input: "Hello, how are you?" -> GENERAL_QUERY
 
     [YOUR TASK]
     User Input: "{question}"
     
     Respond with ONLY the category name. Do not explain."""
-    
+
     try:
         completion = await client.chat.completions.create(
             model=ROUTER_MODEL,
@@ -1104,88 +1135,74 @@ async def search_node(state: AgentState):
 # app/services/chatbot_services.py
 
 async def data_analyst_node(state: AgentState):
-    """
-    Handles complex queries about project status, history, and workloads.
-    PRIVACY: Fetches ONLY projects where the user is a member.
-    """
+    """Handles complex queries about project status."""
     print("🧠 Data Analyst Node Active")
     user_id = state["user_id"]
     
-    # 1. FETCH ONLY USER'S PROJECTS (Privacy Enforcement)
-    user_teams = await Team.find(Team.members == user_id).to_list()
-    
-    if not user_teams:
-        return {"final_response": "You aren't part of any projects yet, so I can't analyze any data."}
+    # 1. Fetch User Identity
+    try:
+        current_user = await User.get(user_id)
+        current_username = current_user.username if current_user else "the current user"
+    except:
+        current_username = "the current user"
 
-    # 2. PREPARE CONTEXT (The "Sandbox")
-    # We build a massive text report of everything happening in these specific teams.
+    user_teams = await Team.find(Team.members == user_id).to_list()
+    if not user_teams: return {"final_response": "You aren't part of any projects yet."}
+
     projects_data = []
-    
     for team in user_teams:
-        # A. Resolve Member Names (Map IDs to Usernames)
         member_map = {}
         for m_id in team.members:
             u = await User.get(m_id)
             if u: member_map[str(u.id)] = u.username
 
-        # B. Format Tasks with Details
         tasks_list = []
         for t in team.tasks:
             assignee_name = member_map.get(t.assignee_id, "Unknown")
-            
-            # Check for extensions
-            is_extended = "Yes" if (t.extension_request or t.was_extended) else "No"
             
             tasks_list.append({
                 "description": t.description,
                 "status": t.status,
                 "assignee": assignee_name,
+                "is_assigned_to_you": (t.assignee_id == user_id), # Renamed for clarity
                 "deadline": t.deadline.strftime("%Y-%m-%d"),
-                "is_extended": is_extended, 
+                "is_extended": "Yes" if (t.extension_request or t.was_extended) else "No", 
             })
-
-        leader_id = team.members[0] if team.members else "None"
 
         projects_data.append({
             "project_name": team.name,
             "description": team.description,
-            "role": "Leader" if leader_id == user_id else "Member",
-            "members": list(member_map.values()),
             "tasks": tasks_list
         })
 
-    # 3. GENERATE ANALYTICAL RESPONSE
+    # 2. Strict Natural Language Prompt
     system_prompt = f"""
     You are the Project Data Analyst.
     
-    ACCESS LEVEL: AUTHENTICATED USER ({user_id})
+    CURRENT USER: {current_username} (ID: {user_id})
     DATA SOURCE: {json.dumps(projects_data, indent=2)}
-    
-    USER QUESTION: "{state['question']}"
+    USER QUERY: "{state['question']}"
     
     INSTRUCTIONS:
-    - The JSON data above contains REAL-TIME project stats.
-    - Search through it to answer the user's specific question.
-    - If asking about "Extended Deadlines", look for 'is_extended': "Yes".
-    - If asking about "Workload", count the tasks per assignee.
-    - If asking about "Status", check the task status fields.
+    1. ANALYZE:
+       - Look for tasks where "is_assigned_to_you" is true.
+       - If the user asks "Do I have tasks?", ONLY report these.
+       - If "is_assigned_to_you" is false, do NOT list that task as theirs.
     
-    FORMATTING:
-    - Provide a clear, professional summary.
-    - Use Markdown tables or bullet points if comparing data.
-    - Do not reveal raw JSON or IDs.
+    2. STYLE GUIDELINES (CRITICAL):
+       - Respond naturally like a human project manager.
+       - 🚫 DO NOT mention "JSON", "fields", "is_me", "true/false", or "data source".
+       - 🚫 DO NOT explain your filtering process (e.g., "I checked the data and...").
+       - Just state the answer directly.
+         - Good: "You have no pending tasks right now."
+         - Bad: "Based on the is_assigned_to_you field being false, you have no tasks."
     """
-
+    
     try:
-        completion = await client.chat.completions.create(
-            model=MENTOR_MODEL,
-            messages=[{"role": "user", "content": system_prompt}]
-        )
+        completion = await client.chat.completions.create(model=MENTOR_MODEL, messages=[{"role": "user", "content": system_prompt}])
         return {"final_response": completion.choices[0].message.content}
-    except Exception as e:
-        print(f"Analyst Error: {e}")
-        return {"final_response": "I couldn't analyze the project data at the moment."}
-
+    except: return {"final_response": "I couldn't analyze the project data."}
+    
 async def chat_node(state: AgentState):
     """
     Handles General Conversation + Project Q&A.
@@ -1299,34 +1316,118 @@ async def chat_node(state: AgentState):
     
     # --- 1. DEFINE THE KNOWLEDGE BASE ---
     platform_guide = """
-    PLATFORM MANUAL FOR COLLABQUEST
-    1. FINDING AND JOINING TEAMS
-    To find a team, users should go to the Marketplace page where they can browse active project cards.
-    To quickly find projects, users can use the Smart Match feature. Swiping right applies to the project, and swiping left passes.
-    To check application status, users should visit the Dashboard and look under the My Applications section to see if they are Pending, Joined, or Rejected.
+    COLLABQUEST SYSTEM REFERENCE MANUAL
 
-    2. CREATING AND RECRUITING
-    To create a team, users must go to the Marketplace page and click the Post Idea button.
-    To recruit developers, Team Leaders can use the Recruit page to swipe on candidates.
-    Only Team Leaders can recruit or manage the team settings.
+    1. AUTHENTICATION & ONBOARDING
+    - Access: Users enter via the Landing Page (Root URL `/`).
+    - Login Methods:
+        1. OAuth: Click "Login with GitHub" or "Login with Google" for one-click access.
+        2. Email: Use the "Email Login" tab to enter credentials.
+        3. Sign Up: Use the "Sign Up" tab to create a new account with Username, Email, and Password (min 6 chars).
+    - Restrictions: Protected pages (Dashboard, Chat, etc.) automatically redirect unauthenticated users back to the Landing Page.
 
-    3. PROFILE AND SKILLS
-    To edit a profile, users should go to the My Profile page to update their bio, interests, and availability.
-    To verify a skill, users must go to My Profile, add a skill, and click the Verify button to take a quiz.
-    If a user fails a verification quiz, they can try again later.
-    The Trust Score is a reliability rating from 0 to 10 that increases by verifying skills and completing projects.
+    2. GLOBAL NAVIGATION & UTILITIES
+    - Global Header: Visible on all authenticated pages.
+        * Dashboard: Links to the central user hub.
+        * Marketplace: Links to the project directory ("Find Team").
+        * Recruit: Links to the Smart Match swipe interface.
+        * Messages: A button with a Message Bubble icon; displays a red badge for unread chats.
+        * Profile Avatar: Opens a dropdown to access "My Profile", "Settings", or "Logout".
+    - Notification Center (Bell Icon):
+        * Invites: Users can "Accept" (Green) or "Reject" (Red) team invitations.
+        * Voting: Users receive "Deletion" or "Completion" requests here and must vote "Approve" or "Reject".
+        * Updates: General alerts (e.g., "Team deleted") appear here.
+    - Accessibility (Selection TTS):
+        * Feature: Selecting any text on the screen triggers the browser to read it aloud if enabled.
+        * Toggle: Users enable/disable this in "Account Settings".
+        * Control: Pressing "ESC" stops audio immediately.
 
-    4. COMMUNICATION AND TOOLS
-    To chat, users can click the Messages button in the header.
-    To send an email, users can click the Mail icon on any user or project card.
-    To check notifications, users should click the Bell Icon. This is where they accept Team Invites and Vote on team decisions.
-    To set availability, users should go to the Weekly Availability section in their Profile.
-    To log out, users must click their Profile Picture in the top right corner and select Logout.
+    3. DASHBOARD (USER HUB)
+    - Route: `/dashboard`
+    - My Network:
+        * Search Mode: Users can search for peers by Name or Tech Stack (Skill).
+        * Connection Tabs: View "My Connections", "Pending Requests" (Accept/Reject), and "Sent Requests".
+        * Actions: Click "Connect" to send requests; click "Message" or "Email" to contact connections.
+    - Active Tasks:
+        * Displays tasks assigned to the user across all projects.
+        * Action: Click "Mark Done" to submit a task for leader review.
+    - My Applications:
+        * Tracks status of project interactions: "Matched", "Invited", "Requested", "Joined", or "Rejected".
+        * Actions: "Join Team" (Accept invite), "Request Join" (Apply to match), or "Reset" (Re-apply after rejection).
+    - Project Lists:
+        * Favorites: Projects the user has starred.
+        * Completed: Past projects marked as "Done".
 
-    5. MANAGING TEAMS
-    To leave a team, users must go to the Team Details page.
-    Major actions like Deleting a Team or Marking a Project Complete require a democratic vote from all members.
-    To re-apply after being rejected, users can go to the Dashboard and click the Reset button on the application.
+    4. MARKETPLACE (PROJECT DISCOVERY)
+    - Route: `/find-team`
+    - Create Project:
+        * Action: Click "+ Post Idea" button.
+        * Inputs: Project Name, Description, and Tech Stack (select from presets or add custom).
+        * Result: Creates a new team with "Planning" status; user becomes Leader.
+    - My Projects Section:
+        * Displays projects the user owns or belongs to.
+        * Leader Actions: "Manage" (Go to Team Dashboard) or "Recruit" (Go to Swipe Match).
+    - Join a Team Section:
+        * Public feed of open projects.
+        * Filters: Search by Name, Tech Stack, Status (Planning/Active), or Recruiting Status.
+        * Action: Click "View Project" or the Star icon to favorite.
+
+    5. SMART MATCH (SWIPE INTERFACE)
+    - Route: `/matches`
+    - Recruit Mode (`type=users`):
+        * Used by Team Leaders to find developers.
+        * Context: If accessed from a specific project, swipes send invites directly from that team.
+    - Find Projects Mode (`type=projects`):
+        * Used by individuals to find teams.
+    - Controls:
+        * Swipe Right (or Green Check): Sends an Invite (Leader) or Join Request (User).
+        * Swipe Left (or Red X): Skips the candidate/project.
+        * Logic: A "High Quality Match" filter is applied automatically based on skill overlap.
+
+    6. TEAM DASHBOARD (PROJECT MANAGEMENT)
+    - Route: `/teams/[id]`
+    - Overview Header:
+        * Displays Team Name, Description, and "Recruit" button (Leader only).
+        * Tech Stack: Leaders can edit required skills; includes an "AI Suggestion" feature to recommend tools based on description.
+    - Member Management:
+        * Roster: Lists all members. Leader can "Kick" members (requires explanation).
+        * Candidates: Leaders can "Accept" or "Reject" applicants from the Smart Match system.
+    - Workflow (Task Board):
+        * Creation: Leaders/Members create tasks with Description, Assignee, and Deadline.
+        * Lifecycle: Pending -> In Review (Member submits) -> Completed (Leader verifies) OR Rework (Leader rejects).
+        * Extensions: Users can request deadline extensions; requires team vote or leader approval.
+    - Roadmap:
+        * AI Generation: Leaders can click "Generate Plan" to create a week-by-week execution roadmap based on the project description.
+    - Settings & Danger Zone:
+        * Complete Project: Initiates a "Completion Vote". If passed, members rate each other.
+        * Delete Project: Initiates a "Democratic Vote". Majority must approve to delete the team.
+
+    7. PROFILE & CREDIBILITY
+    - Public Profile (`/profile/[id]`):
+        * Trust Score: A verified rating (0-10) derived from linked accounts and peer reviews.
+        * AI Match Score: Shows compatibility percentage with the viewer.
+        * Verified Stats: Displays data from GitHub (Repo count), LeetCode (Problems solved), and Codeforces (Rating) if public.
+        * Actions: "Send Message" (Chat) or "Send Email" (Secure Gateway).
+    - Profile Settings (`/profile`):
+        * Visibility: Toggle "Eye" icons to hide/show Email, Education, or External Stats.
+        * Skill Verification: Users verify skills by taking a timed quiz (15s/question). Passing adds the skill to the profile.
+        * Availability: Users set weekly time slots to help the matching algorithm.
+        * Linking: Connect GitHub/LinkedIn/Coding accounts to boost Trust Score.
+
+    8. COMMUNICATION
+    - Chat (`/chat`):
+        * Features: Real-time messaging, File attachments (Images/Video/Docs), Emojis.
+        * Video/Audio Calls: WebRTC-powered. Accessed via Phone/Video icons in the chat header.
+        * Screen Share: Available during video calls via the Monitor icon.
+    - Secure Email:
+        * Accessed via the "Mail" icon on user cards. Allows sending emails without revealing the recipient's address.
+
+    9. ACCOUNT SETTINGS
+    - Route: `/settings`
+    - Preferences: Toggle "Selection Text-to-Speech" for global accessibility.
+    - Account Deletion:
+        * Users must type "DELETE" to confirm.
+        * Restriction: Cannot delete account if currently part of an Active or Planning team.
     """
 
     system_instruction = f"""
