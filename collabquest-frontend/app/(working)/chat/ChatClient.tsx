@@ -59,7 +59,26 @@ const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
 
 // --- WEBRTC CONFIG ---
 const rtcConfig = {
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+    iceServers: [
+        {
+            urls: "stun:stun.l.google.com:19302",
+        },
+        {
+            urls: "turn:openrelay.metered.ca:80",
+            username: "openrelayproject",
+            credential: "openrelayproject"
+        },
+        {
+            urls: "turn:openrelay.metered.ca:443",
+            username: "openrelayproject",
+            credential: "openrelayproject"
+        },
+        {
+            urls: "turn:openrelay.metered.ca:443?transport=tcp",
+            username: "openrelayproject",
+            credential: "openrelayproject"
+        }
+    ]
 };
 
 function ChatPage() {
@@ -426,7 +445,6 @@ function ChatPage() {
     return (
         <div className="h-screen bg-gray-950 text-white flex flex-col overflow-hidden relative">
             <style jsx global>{` .custom-scrollbar::-webkit-scrollbar { width: 6px; } .custom-scrollbar::-webkit-scrollbar-track { background: #111827; } .custom-scrollbar::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; } .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #4B5563; } `}</style>
-            <GlobalHeader />
 
             {/* --- CALL OVERLAY --- */}
             <AnimatePresence>

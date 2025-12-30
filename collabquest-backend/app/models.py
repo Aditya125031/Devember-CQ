@@ -142,6 +142,7 @@ class User(Document):
     accepted_chat_requests: List[str] = []
     favorites: List[str] = [] 
     embedding: List[float] = []
+    is_onboarded: bool = Field(default=False)
     
     # --- NEW FIELDS FOR CONNECTIONS ---
     connections: List[str] = [] # List of User IDs

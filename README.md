@@ -8,7 +8,10 @@ Frontend: Next.js, Tailwind CSS, Framer Motion
 
 Backend: Python FastAPI, Uvicorn
 
+
+
 Database: MongoDB (Beanie ODM)
+
 
 Auth: GitHub OAuth + JWT
 

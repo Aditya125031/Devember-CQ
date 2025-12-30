@@ -6,7 +6,8 @@ import Link from "next/link";
 import { Loader2, Volume2, ArrowLeft, AlertTriangle, Trash2 } from "lucide-react";
 import api from "@/lib/api";
 
-export default function SettingsPage() {
+export default function SettingsClient() {
+  // deterministic initial state to avoid SSR/client mismatch
   const [tts, setTts] = useState<boolean>(false);
   const [allowed, setAllowed] = useState<boolean | null>(null);
 
