@@ -1,12 +1,12 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Cookies from "js-cookie";
 import api from "@/lib/api";
 import { motion, useMotionValue, useTransform, AnimatePresence } from "framer-motion";
 import { ShieldCheck, Loader2, X, Check, ArrowLeft, ArrowRight, Code2 } from "lucide-react";
 
-export default function SwipeMatchPage() {
+function SwipeMatchPage() {
     const router = useRouter();
     const searchParams = useSearchParams();
 
@@ -231,4 +231,13 @@ function SwipeCard({ item, mode, isTop, x, rotate, opacityLike, opacityNope, onS
             </div>
         </motion.div>
     );
+}
+
+export default function SwipeMatchPages() {
+  return (
+    // You can put a loading spinner in the "fallback"
+    <Suspense fallback={<div>Loading chat...</div>}>
+      <SwipeMatchPage/>
+    </Suspense>
+  )
 }

@@ -4,12 +4,19 @@ from pydantic import BaseModel, EmailStr
 from app.auth.utils import (
     get_github_token, get_github_user, update_trust_score, 
     create_access_token, GITHUB_CLIENT_ID, hash_password, verify_password,
-    get_google_token, get_google_user, GOOGLE_CLIENT_ID
+    get_google_token, get_google_user, GOOGLE_CLIENT_ID, verify_token
 )
-from app.models import User, TrustBreakdown
+from app.models import User, TrustBreakdown, ConnectedAccounts
 from app.database import init_db
+from typing import Optional
+import os
+import traceback
+from dotenv import load_dotenv
 
 router = APIRouter()
+
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+API_URL = os.getenv("API_URL", "http://localhost:8000")
 
 # --- REQUEST MODELS ---
 class EmailRegisterRequest(BaseModel):
@@ -35,8 +42,22 @@ async def github_login():
         f"https://github.com/login/oauth/authorize?client_id={GITHUB_CLIENT_ID}&scope=read:user user:email"
     )
 
+@router.get("/link/github")
+async def link_github(token: str):
+    """
+    Initiates GitHub OAuth flow for linking an account to an EXISTING user.
+    """
+    # FIX: Check if payload is returned, otherwise raise exception
+    payload = verify_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid session")
+        
+    return RedirectResponse(
+        f"https://github.com/login/oauth/authorize?client_id={GITHUB_CLIENT_ID}&scope=read:user user:email&state={token}"
+    )
+
 @router.get("/callback")
-async def github_callback(code: str):
+async def github_callback(code: str, state: Optional[str] = None):
     token = await get_github_token(code)
     if not token:
         raise HTTPException(status_code=400, detail="GitHub Login Failed")
@@ -47,6 +68,51 @@ async def github_callback(code: str):
         raise HTTPException(status_code=400, detail="Failed to fetch GitHub profile")
 
     github_id_str = str(github_user["id"])
+
+    # --- LINKING FLOW (If state/token is present) ---
+    if state:
+        try:
+            payload = verify_token(state)
+            current_user_id = payload.get("sub")
+            user = await User.get(current_user_id)
+            
+            if user:
+                # 1. Check if this GitHub account is already linked to ANOTHER user
+                conflict = await User.find_one(User.github_id == github_id_str)
+                if conflict and str(conflict.id) != str(user.id):
+                    return RedirectResponse(f"{FRONTEND_URL}/profile?error=github_taken")
+
+                # 2. Link Account
+                user.github_id = github_id_str
+                
+                # 3. Update Connected Accounts
+                if not user.connected_accounts: 
+                    user.connected_accounts = ConnectedAccounts()
+                user.connected_accounts.github = github_user["login"]
+                
+                # 4. Fill Data from GitHub (Only if missing)
+                if not user.avatar_url:
+                    user.avatar_url = github_user["avatar_url"]
+                
+                if not user.full_name and github_user.get("name"):
+                    user.full_name = github_user["name"]
+                    
+                if (not user.about or user.about == "I love building cool things!") and github_user.get("bio"):
+                    user.about = github_user["bio"]
+
+                # 5. Update Stats & Trust Score
+                if not user.platform_stats: 
+                    user.platform_stats = {}
+                user.platform_stats["github"] = github_user
+                
+                await update_trust_score(user)
+                await user.save()
+                
+                return RedirectResponse(f"{FRONTEND_URL}/profile?success=github_linked")
+        except Exception as e:
+            print(f"Linking Error: {e}")
+            traceback.print_exc()
+            return RedirectResponse(f"{FRONTEND_URL}/profile?error=linking_failed")
     
     # Check if user exists in DB
     user = await User.find_one(User.github_id == github_id_str)
@@ -89,7 +155,7 @@ async def github_callback(code: str):
     # Generate JWT for the Frontend
     jwt_token = create_access_token({"sub": str(user.id)})
     
-    return RedirectResponse(f"http://localhost:3000/dashboard?token={jwt_token}")
+    return RedirectResponse(f"{FRONTEND_URL}/dashboard?token={jwt_token}")
 
 @router.get("/dev/{username}")
 async def dev_login(username: str):
@@ -107,7 +173,7 @@ async def dev_login(username: str):
     jwt_token = create_access_token({"sub": str(user.id)})
     
     # 3. Redirect to Frontend just like a real login
-    return RedirectResponse(f"http://localhost:3000/dashboard?token={jwt_token}")
+    return RedirectResponse(f"{FRONTEND_URL}/dashboard?token={jwt_token}")
 
 # --- EMAIL & PASSWORD AUTH ---
 
@@ -183,7 +249,7 @@ async def login_email(request: EmailLoginRequest):
 async def google_login():
     """Redirect user to Google OAuth consent screen"""
     return RedirectResponse(
-        f"https://accounts.google.com/o/oauth2/v2/auth?client_id={GOOGLE_CLIENT_ID}&redirect_uri=http://localhost:8000/auth/google/callback&response_type=code&scope=openid profile email"
+        f"https://accounts.google.com/o/oauth2/v2/auth?client_id={GOOGLE_CLIENT_ID}&redirect_uri={API_URL}/auth/google/callback&response_type=code&scope=openid profile email"
     )
 
 @router.get("/google/callback")
@@ -191,7 +257,7 @@ async def google_callback(code: str):
     """
     Google OAuth callback handler
     """
-    token = await get_google_token(code, "http://localhost:8000/auth/google/callback")
+    token = await get_google_token(code, API_URL + "/auth/google/callback")
     if not token:
         raise HTTPException(status_code=400, detail="Google Login Failed")
     
@@ -217,4 +283,4 @@ async def google_callback(code: str):
     # Generate JWT
     jwt_token = create_access_token({"sub": str(user.id)})
     
-    return RedirectResponse(f"http://localhost:3000/dashboard?token={jwt_token}")
+    return RedirectResponse(f"{FRONTEND_URL}/dashboard?token={jwt_token}")

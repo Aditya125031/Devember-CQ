@@ -15,7 +15,6 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 # --- CORS SETTINGS ---
 # This allows your Next.js frontend to talk to this backend
 origins = [
-    "http://localhost:3000",
     FRONTEND_URL,
 ]
 
