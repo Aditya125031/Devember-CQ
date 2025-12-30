@@ -4,6 +4,7 @@
 Thumbs.db
 .vscode/
 .idea/
+node_modules/
 
 --- SECRETS (NEVER PUSH THESE) ---
 

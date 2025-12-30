@@ -4,6 +4,7 @@ import Cookies from "js-cookie";
 import { usePathname } from "next/navigation"; // 🔥 Added to check current page
 import { Send, Bot, User, X, Loader2, Sparkles, Mic, Volume2, VolumeX } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import ReactMarkdown from "react-markdown";
 
 // --- 1. TYPE DEFINITIONS ---
 declare global {
@@ -299,14 +300,54 @@ export default function Chatbot({ onClose }: ChatbotProps) {
                     {m.role === "user" ? <User className="w-4 h-4 text-zinc-400" /> : <Bot className="w-4 h-4 text-white" />}
                 </div>
 
+                {/* Chat Bubble */}
                 <div
-                className={`p-3.5 rounded-2xl text-sm leading-relaxed max-w-[85%] shadow-sm break-words whitespace-pre-wrap ${
+                    // I added 'overflow-hidden' as a safety net, keep break-words here too.
+                    className={`p-3.5 rounded-2xl text-sm leading-relaxed max-w-[85%] shadow-sm break-words overflow-hidden ${
                     m.role === "user"
-                    ? "bg-zinc-800 text-zinc-100 rounded-tr-none"
-                    : "bg-gradient-to-br from-indigo-600 to-violet-600 text-white rounded-tl-none"
-                }`}
+                        ? "bg-zinc-800 text-zinc-100 rounded-tr-none"
+                        : "bg-gradient-to-br from-indigo-600 to-violet-600 text-white rounded-tl-none"
+                    }`}
                 >
-                {m.text}
+                <ReactMarkdown
+                  components={{
+                    // 1. Paragraphs
+                    p: ({node, ...props}) => <p className="mb-2 last:mb-0 break-words w-full" {...props} />,
+                    
+                    // 2. Lists
+                    li: ({node, ...props}) => <li className="break-words ml-4" {...props} />,
+                    ul: ({node, ...props}) => <ul className="list-disc mt-1 mb-2 space-y-1" {...props} />,
+                    ol: ({node, ...props}) => <ol className="list-decimal mt-1 mb-2 space-y-1" {...props} />,
+
+                    // 3. Links
+                    a: ({node, ...props}) => <a className="underline text-indigo-200 hover:text-indigo-100 break-words" target="_blank" rel="noopener noreferrer" {...props} />,
+
+                    // 4. Headings (New! Makes headers look better)
+                    h1: ({node, ...props}) => <h1 className="text-lg font-bold mt-4 mb-2" {...props} />,
+                    h2: ({node, ...props}) => <h2 className="text-base font-bold mt-3 mb-2" {...props} />,
+
+                    // 5. CODE BLOCKS (The Big Improvement)
+                    pre: ({node, ...props}) => (
+                      <div className="relative my-3 rounded-lg overflow-hidden bg-zinc-950 border border-white/10 shadow-sm">
+                        {/* We wrap pre in a div to give it a nice border and solid background */}
+                        <pre className="p-3 text-xs font-mono text-zinc-300 whitespace-pre-wrap break-words overflow-x-auto" {...props} />
+                      </div>
+                    ),
+
+                    // 6. INLINE CODE (Small snippets like `const x = 1`)
+                    code: ({node, className, ...props}: any) => {
+                      // This check prevents the inline styling from applying to the big code blocks
+                      const isInline = !String(className).includes('language-'); 
+                      return isInline ? (
+                        <code className="bg-black/30 rounded px-1.5 py-0.5 font-mono text-xs font-bold text-white/90 border border-white/10" {...props} />
+                      ) : (
+                        <code className="font-mono" {...props} />
+                      );
+                    }
+                  }}
+                >
+                  {m.text}
+                </ReactMarkdown>
                 </div>
             </motion.div>
             ))}

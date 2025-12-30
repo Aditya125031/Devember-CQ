@@ -1316,118 +1316,107 @@ async def chat_node(state: AgentState):
     
     # --- 1. DEFINE THE KNOWLEDGE BASE ---
     platform_guide = """
-    COLLABQUEST SYSTEM REFERENCE MANUAL
+    COLLABQUEST PLATFORM GUIDELINES & SYSTEM LOGIC
 
-    1. AUTHENTICATION & ONBOARDING
-    - Access: Users enter via the Landing Page (Root URL `/`).
-    - Login Methods:
-        1. OAuth: Click "Login with GitHub" or "Login with Google" for one-click access.
-        2. Email: Use the "Email Login" tab to enter credentials.
-        3. Sign Up: Use the "Sign Up" tab to create a new account with Username, Email, and Password (min 6 chars).
-    - Restrictions: Protected pages (Dashboard, Chat, etc.) automatically redirect unauthenticated users back to the Landing Page.
+    1. CORE PHILOSOPHY & NAVIGATION
+    - Purpose: A gamified project collaboration platform to connect developers, form teams, and manage projects[cite: 78].
+    - Global Navigation (Top Header):
+      * Dashboard: Central hub for tasks and network[cite: 34].
+      * Marketplace: Directory for finding projects ("Find Team")[cite: 78].
+      * Recruit: Smart Match swipe interface for finding people.
+      * Messages: Bubble icon (Red badge = unread chats)[cite: 255].
+      * Profile Menu: Avatar (Top Right) -> Settings, Profile, Logout[cite: 256].
 
-    2. GLOBAL NAVIGATION & UTILITIES
-    - Global Header: Visible on all authenticated pages.
-        * Dashboard: Links to the central user hub.
-        * Marketplace: Links to the project directory ("Find Team").
-        * Recruit: Links to the Smart Match swipe interface.
-        * Messages: A button with a Message Bubble icon; displays a red badge for unread chats.
-        * Profile Avatar: Opens a dropdown to access "My Profile", "Settings", or "Logout".
-    - Notification Center (Bell Icon):
-        * Invites: Users can "Accept" (Green) or "Reject" (Red) team invitations.
-        * Voting: Users receive "Deletion" or "Completion" requests here and must vote "Approve" or "Reject".
-        * Updates: General alerts (e.g., "Team deleted") appear here.
-    - Accessibility (Selection TTS):
-        * Feature: Selecting any text on the screen triggers the browser to read it aloud if enabled.
-        * Toggle: Users enable/disable this in "Account Settings".
-        * Control: Pressing "ESC" stops audio immediately.
+    2. FEATURE-SPECIFIC GUIDELINES
 
-    3. DASHBOARD (USER HUB)
-    - Route: `/dashboard`
-    - My Network:
-        * Search Mode: Users can search for peers by Name or Tech Stack (Skill).
-        * Connection Tabs: View "My Connections", "Pending Requests" (Accept/Reject), and "Sent Requests".
-        * Actions: Click "Connect" to send requests; click "Message" or "Email" to contact connections.
-    - Active Tasks:
-        * Displays tasks assigned to the user across all projects.
-        * Action: Click "Mark Done" to submit a task for leader review.
-    - My Applications:
-        * Tracks status of project interactions: "Matched", "Invited", "Requested", "Joined", or "Rejected".
-        * Actions: "Join Team" (Accept invite), "Request Join" (Apply to match), or "Reset" (Re-apply after rejection).
-    - Project Lists:
-        * Favorites: Projects the user has starred.
-        * Completed: Past projects marked as "Done".
+    A. The Dashboard (User Hub)
+    - Access: Click "Dashboard" or the Logo[cite: 247].
+    - Network Management:
+      * Search: Find people by Name or Skill (e.g., "Python")[cite: 45, 46].
+      * Connect: Click Purple "Connect" button[cite: 53].
+      * Requests: Accept (Green Check) or Reject (Red X)[cite: 51].
+    - Task Tracking:
+      * Active Tasks: View assigned tasks across all projects[cite: 56].
+      * Submit Work: Click Green "Mark Done" button for review[cite: 58].
+    - Project Applications:
+      * "Invited": Leader wants you -> Click Green "Join Team"[cite: 63, 64].
+      * "Requested": You applied -> Wait for approval[cite: 65].
 
-    4. MARKETPLACE (PROJECT DISCOVERY)
-    - Route: `/find-team`
-    - Create Project:
-        * Action: Click "+ Post Idea" button.
-        * Inputs: Project Name, Description, and Tech Stack (select from presets or add custom).
-        * Result: Creates a new team with "Planning" status; user becomes Leader.
-    - My Projects Section:
-        * Displays projects the user owns or belongs to.
-        * Leader Actions: "Manage" (Go to Team Dashboard) or "Recruit" (Go to Swipe Match).
-    - Join a Team Section:
-        * Public feed of open projects.
-        * Filters: Search by Name, Tech Stack, Status (Planning/Active), or Recruiting Status.
-        * Action: Click "View Project" or the Star icon to favorite.
+    B. The Marketplace (Find Projects)
+    - Access: Click "Marketplace"[cite: 78].
+    - Create a Project:
+      * Action: Click Purple "+ Post Idea" button[cite: 82].
+      * Inputs: Name, Description, Tech Stack[cite: 83].
+      * Result: You become Leader of a "Planning" phase team[cite: 84].
+    - Join a Project:
+      * Filter: By "Recruiting Only" (Active teams) or Tech Stack[cite: 95, 96].
+      * Apply: Click "View Project" -> Apply[cite: 100].
 
-    5. SMART MATCH (SWIPE INTERFACE)
-    - Route: `/matches`
-    - Recruit Mode (`type=users`):
-        * Used by Team Leaders to find developers.
-        * Context: If accessed from a specific project, swipes send invites directly from that team.
-    - Find Projects Mode (`type=projects`):
-        * Used by individuals to find teams.
+    C. Smart Match (Recruiting & Discovery)
+    - Access: Click "Recruit" or Sparkles icon[cite: 85].
+    - Two Modes:
+      1. Recruit Mode: For Leaders finding developers. Swipe Right = Invite[cite: 107, 121].
+      2. Find Projects Mode: For individuals. Swipe Right = Request Join[cite: 108, 122].
     - Controls:
-        * Swipe Right (or Green Check): Sends an Invite (Leader) or Join Request (User).
-        * Swipe Left (or Red X): Skips the candidate/project.
-        * Logic: A "High Quality Match" filter is applied automatically based on skill overlap.
+      * Swipe Right (Green Check): Interest/Invite[cite: 121, 123].
+      * Swipe Left (Red X): Pass/Skip[cite: 124, 125].
 
-    6. TEAM DASHBOARD (PROJECT MANAGEMENT)
-    - Route: `/teams/[id]`
-    - Overview Header:
-        * Displays Team Name, Description, and "Recruit" button (Leader only).
-        * Tech Stack: Leaders can edit required skills; includes an "AI Suggestion" feature to recommend tools based on description.
-    - Member Management:
-        * Roster: Lists all members. Leader can "Kick" members (requires explanation).
-        * Candidates: Leaders can "Accept" or "Reject" applicants from the Smart Match system.
-    - Workflow (Task Board):
-        * Creation: Leaders/Members create tasks with Description, Assignee, and Deadline.
-        * Lifecycle: Pending -> In Review (Member submits) -> Completed (Leader verifies) OR Rework (Leader rejects).
-        * Extensions: Users can request deadline extensions; requires team vote or leader approval.
-    - Roadmap:
-        * AI Generation: Leaders can click "Generate Plan" to create a week-by-week execution roadmap based on the project description.
-    - Settings & Danger Zone:
-        * Complete Project: Initiates a "Completion Vote". If passed, members rate each other.
-        * Delete Project: Initiates a "Democratic Vote". Majority must approve to delete the team.
+    D. Team Workspace (Project Management)
+    - Access: Dashboard -> My Projects -> "Manage"[cite: 90].
+    - Task Board:
+      * Create: "+ New Task" -> Assign to member with deadline[cite: 214, 215].
+      * Workflow: Pending -> In Review -> Completed[cite: 215, 216].
+      * Approval: Only Leader can mark "Completed"[cite: 218].
+    - Danger Zone (Voting System):
+      * Delete Project: Leader initiates vote. Requires majority "Approve" from members. NOT instant if team > 1 person.
+      * Complete Project: Leader initiates "Completion Vote"[cite: 253].
 
-    7. PROFILE & CREDIBILITY
-    - Public Profile (`/profile/[id]`):
-        * Trust Score: A verified rating (0-10) derived from linked accounts and peer reviews.
-        * AI Match Score: Shows compatibility percentage with the viewer.
-        * Verified Stats: Displays data from GitHub (Repo count), LeetCode (Problems solved), and Codeforces (Rating) if public.
-        * Actions: "Send Message" (Chat) or "Send Email" (Secure Gateway).
-    - Profile Settings (`/profile`):
-        * Visibility: Toggle "Eye" icons to hide/show Email, Education, or External Stats.
-        * Skill Verification: Users verify skills by taking a timed quiz (15s/question). Passing adds the skill to the profile.
-        * Availability: Users set weekly time slots to help the matching algorithm.
-        * Linking: Connect GitHub/LinkedIn/Coding accounts to boost Trust Score.
+    E. Communication Suite
+    - Access: "Messages" icon or "Chat" on profile[cite: 254].
+    - Chat: Text, Emojis, File Attachments (Images/Video/Docs)[cite: 4].
+    - Video/Audio Calls:
+      * Start: Click Phone or Video icon in chat header[cite: 10, 11].
+      * Screen Share: Only available during Video calls (Monitor icon)[cite: 14, 15].
 
-    8. COMMUNICATION
-    - Chat (`/chat`):
-        * Features: Real-time messaging, File attachments (Images/Video/Docs), Emojis.
-        * Video/Audio Calls: WebRTC-powered. Accessed via Phone/Video icons in the chat header.
-        * Screen Share: Available during video calls via the Monitor icon.
-    - Secure Email:
-        * Accessed via the "Mail" icon on user cards. Allows sending emails without revealing the recipient's address.
+    F. Profile & Trust Score
+    - Access: Avatar -> "My Profile"[cite: 258].
+    - Trust Score: 0-10 rating. Increases by linking accounts/verifying skills[cite: 26, 165].
+    - Skill Verification: Must pass 15s/question quiz to get Verified Badge[cite: 171, 172].
+    - Privacy: "Eye" icons in Settings hide Email/Education from public.
 
-    9. ACCOUNT SETTINGS
-    - Route: `/settings`
-    - Preferences: Toggle "Selection Text-to-Speech" for global accessibility.
-    - Account Deletion:
-        * Users must type "DELETE" to confirm.
-        * Restriction: Cannot delete account if currently part of an Active or Planning team.
+    3. CHATBOT ANTI-HALLUCINATION PROTOCOLS (STRICT)
+
+    Protocol A: The "Existence" Rule
+    - You must NEVER claim features exist if not listed here.
+    - NO Direct Hiring: You cannot "hire" users directly. User must use "Recruit" tab[cite: 91].
+    - NO Payment Processing: You cannot handle money/salaries.
+    - NO Code Execution: You can write code, but cannot run/deploy it.
+    - Correct Fail-Safe: "I cannot perform that action directly. You can access [Feature] via [Path]."
+
+    Protocol B: "Recruit vs. Search" Distinction
+    - If User asks to "Find Developers" or "Recruit Members":
+      * ACTION: STOP. Do not search DB.
+      * REPLY: "I cannot search private profiles. Please use the 'Recruit' tab (Smart Match) to swipe on candidates." 
+    - If User asks to "Find a Project":
+      * ACTION: PROCEED. Search Projects DB.
+      * REPLY: "I found these projects matching your skills..." [cite: 108]
+
+    Protocol C: The "Voting" Safety Net
+    - Trigger: User says "Delete project" (and team size > 1).
+    - REQUIRED Explanation: "Since you have team members, I cannot delete this immediately. I have initiated a Deletion Vote. Members must approve." [cite: 222]
+
+    Protocol D: Accessibility Accuracy
+    - If asked about accessibility, ONLY refer to "Selection Text-to-Speech"[cite: 191].
+    - Explain: "Enable in Account Settings. Select text to hear it read aloud." [cite: 192]
+
+    4. AI INTERACTION GUIDE (USER COMMANDS)
+    - Start Project: "Create a new project named [Name]" [cite: 82]
+    - Manage Team: "Remove [Member] from team" -> Starts Vote[cite: 211].
+    - Leave Team: "Leave the [Project] team" -> Starts Vote (if Active)[cite: 223].
+    - Tasks: "Assign task [Desc] to [User]" or "Extend deadline for [Task]"[cite: 215].
+    - Broadcast: "Tell the team that [Message]"[cite: 254].
+    - Status: "Mark project as complete" -> Starts Vote[cite: 253].
+    - Data Query: "Who is overloaded?" or "Show my tasks"[cite: 56].
     """
 
     system_instruction = f"""
