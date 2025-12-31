@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 import uuid 
 
-# --- HELPER MODELS ---
+# ... [Keep all Helper Models: TimeRange, DayAvailability, Skill, Link, Achievement, ConnectedAccounts, Rating] ...
 class TimeRange(BaseModel):
     start: str 
     end: str 
@@ -28,6 +28,7 @@ class Achievement(BaseModel):
     description: Optional[str] = None
 
 class ConnectedAccounts(BaseModel):
+    github: Optional[str] = None
     linkedin: Optional[str] = None
     codeforces: Optional[str] = None
     leetcode: Optional[str] = None
@@ -58,6 +59,7 @@ class Education(BaseModel):
     is_visible: bool = True 
 
 class VisibilitySettings(BaseModel):
+    full_name: bool = True
     linkedin: bool = True
     codeforces: bool = True
     leetcode: bool = True
@@ -66,7 +68,7 @@ class VisibilitySettings(BaseModel):
     ratings: bool = True
     email: bool = False
 
-# --- VOTING & REQUEST MODELS ---
+# ... [Keep Voting Models: DeletionRequest, CompletionRequest, MemberRequest, ExtensionRequest] ...
 class DeletionRequest(BaseModel):
     is_active: bool = False
     initiator_id: str
@@ -104,6 +106,7 @@ class User(Document):
     email: str
     password_hash: Optional[str] = None
     avatar_url: Optional[str] = None
+    full_name: Optional[str] = None
     
     # Trust Score
     trust_score: float = Field(default=5.0)
@@ -138,11 +141,17 @@ class User(Document):
 
     accepted_chat_requests: List[str] = []
     favorites: List[str] = [] 
-    embedding: List[float] = [] 
+    embedding: List[float] = []
     is_onboarded: bool = Field(default=False)
+    
+    # --- NEW FIELDS FOR CONNECTIONS ---
+    connections: List[str] = [] # List of User IDs
+    connection_requests_received: List[str] = [] # List of User IDs
+    connection_requests_sent: List[str] = [] # List of User IDs
     
     class Settings: name = "users"
 
+# ... [Keep UnreadCount, Task, Team, Block, Swipe, Match, Notification, Attachment, Message, ChatGroup, Question] ...
 class UnreadCount(Document):
     user_id: str
     target_id: str 
@@ -173,6 +182,7 @@ class Team(Document):
     description: str
     members: List[str]
     needed_skills: List[str] = [] 
+    leader_id: Optional[str] = None
     active_needed_skills: List[str] = [] 
     is_looking_for_members: bool = Field(default=True)
 
@@ -259,3 +269,16 @@ class Question(Document):
     correct_index: int
     difficulty: str 
     class Settings: name = "questions"
+
+class ChatMessage(Document):
+    user_id: str
+    question: str
+    answer: str
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    class Settings:
+        name = "chat_messages"
+        indexes = [
+            "user_id",
+            "timestamp"
+        ]

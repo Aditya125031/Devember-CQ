@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google"; // Or your preferred font
-import "./globals.css"; // Your global styles
-import SelectionTTS from "@/components/SelectionTTS"; // Using @/ is safer for paths
+import { Geist, Geist_Mono, Inter } from "next/font/google";
+import FloatingChatbot from "../components/FloatingChatbot";
+import "./globals.css";
+import SelectionTTS from "@/components/SelectionTTS";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -20,7 +21,8 @@ export default function RootLayout({
       <body className={inter.className}>
         {/* TTS Listener acts globally here */}
         <SelectionTTS />
-        
+        {/* Global floating chatbot */}
+        <FloatingChatbot />   
         {children}
       </body>
     </html>

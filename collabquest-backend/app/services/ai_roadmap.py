@@ -39,17 +39,28 @@ async def generate_roadmap(project_idea: str, tech_stack: list[str], weeks: int 
     
     prompt = f"""
     You are a Senior Project Manager.
-    Create a {weeks}-week project roadmap for a team building: "{project_idea}".
-    Tech Stack: {', '.join(tech_stack)}.
     
-    You MUST return ONLY a valid JSON object.
-    Structure:
+    Request: Create a {weeks}-week project roadmap.
+    Project Idea: "{project_idea}"
+    Tech Stack: {', '.join(tech_stack)}
+    
+    CRITICAL INSTRUCTION:
+    First, evaluate the input for validity.
+    1. Is the "Project Idea" a coherent software project description? (If it's gibberish like "asdf" or irrelevant like "I like pizza", reject it).
+    2. Is the "Tech Stack" generally compatible with the idea?
+    
+    If the input is invalid, irrelevant, or nonsense, YOU MUST return ONLY this JSON:
+    {{ "error": "The project description or tech stack seems unclear or irrelevant. Please refine them." }}
+
+    If the input is valid, return the Roadmap JSON structure:
     {{
         "title": "Project Name",
         "phases": [
             {{ "week": 1, "goal": "Goal", "tasks": [{{"role": "Frontend", "task": "..."}}] }}
         ]
     }}
+    
+    Return ONLY valid JSON.
     """
     try:
         response = model.generate_content(prompt)
@@ -69,10 +80,16 @@ async def suggest_tech_stack(description: str, current_stack: list[str]):
     Project Description: "{description}"
     Current Stack: {json.dumps(current_stack)}
     
-    1. Suggest tools to ADD that are missing (e.g., Database, Auth, Deployment) relevant to the description.
-    2. Identify redundant/outdated tools to REMOVE, only if they are too redundant.
+    CRITICAL INSTRUCTION:
+    First, evaluate if the "Project Description" is valid.
+    If the description is too short (e.g. "app"), gibberish, or not about software, return ONLY:
+    {{ "error": "Please provide a more detailed project description for accurate suggestions." }}
     
-    Return ONLY a valid JSON object. No markdown.
+    If valid, proceed to:
+    1. Suggest tools to ADD that are missing (e.g., Database, Auth, Deployment).
+    2. Identify redundant/outdated tools to REMOVE.
+    
+    Return ONLY a valid JSON object.
     Format:
     {{
         "add": ["Tool A", "Tool B"],
@@ -93,6 +110,10 @@ async def suggest_tech_stack(description: str, current_stack: list[str]):
         if not result:
             return {"add": [], "remove": []}
             
+        # Check if AI returned a validation error
+        if "error" in result:
+            return result
+
         # Ensure keys exist
         return {
             "add": result.get("add", []),

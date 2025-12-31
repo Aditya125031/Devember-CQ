@@ -9,8 +9,11 @@ import traceback
 import shutil
 import os
 import uuid
+from dotenv import load_dotenv
 
 router = APIRouter()
+
+API_URL = os.getenv("API_URL", "http://localhost:8000")
 
 # --- Input Models ---
 class GroupCreate(BaseModel):
@@ -78,7 +81,7 @@ async def upload_file(file: UploadFile = File(...)):
 
         # Construct URL (Assuming local for now, replace with S3 in prod)
         # Note: In production, use an ENV variable for the base URL
-        file_url = f"http://localhost:8000/uploads/{unique_name}"
+        file_url = f"{API_URL}/uploads/{unique_name}"
 
         return {
             "url": file_url,

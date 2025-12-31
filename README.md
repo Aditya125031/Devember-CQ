@@ -81,12 +81,14 @@ GEMINI_API_KEY=your_gemini_api_key
 GOOGLE_CLIENT_ID=your_google_client_id
 GOOGLE_CLIENT_SECRET=your_google_client_secret
 FRONTEND_URL=http://localhost:3000 (or your production URL)
+API_URL=http://localhost:8000 (or your production URL)
 MAIL_USERNAME=your_email@gmail.com
 MAIL_PASSWORD=your_app_password_here
 MAIL_FROM=your_email@gmail.com
 MAIL_PORT=587
 MAIL_SERVER=smtp.gmail.com
 MAIL_FROM_NAME="CollabQuest Team"
+OPENROUTER_API_KEY=your_openrouter_api_key
 
 Run the Server:
 uvicorn main:app --reload

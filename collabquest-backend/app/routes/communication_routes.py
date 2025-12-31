@@ -4,8 +4,11 @@ from app.models import User
 from app.auth.dependencies import get_current_user
 import os
 from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
+from dotenv import load_dotenv
 
 router = APIRouter()
+
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 # --- EMAIL CONFIGURATION ---
 conf = ConnectionConfig(
@@ -35,12 +38,20 @@ async def send_email(
     Sends an email from the current user to the recipient.
     Privacy: The sender never sees the recipient's email address.
     """
-    # 1. Fetch Recipient
+    # 1. Check for Block
+    is_blocked = await Block.find_one({"$or": [
+        {"blocker_id": email_data.recipient_id, "blocked_id": str(current_user.id)},
+        {"blocker_id": str(current_user.id), "blocked_id": email_data.recipient_id}
+    ]})
+    if is_blocked:
+        raise HTTPException(status_code=403, detail="Cannot send email to this user.")
+
+    # 2. Fetch Recipient
     recipient = await User.get(email_data.recipient_id)
     if not recipient:
         raise HTTPException(status_code=404, detail="Recipient not found")
     
-    # 2. Construct the Email Content
+    # 3. Construct the Email Content
     sender_name = current_user.username
     sender_email = current_user.email
     recipient_email = recipient.email
@@ -51,7 +62,7 @@ async def send_email(
     formatted_body = email_data.body.replace("\n", "<br>")
     
     # Link to the sender's profile (Assuming frontend runs on localhost:3000)
-    profile_url = f"http://localhost:3000/profile/{current_user.id}"
+    profile_url = f"{FRONTEND_URL}/profile/{current_user.id}"
 
     # HTML Body
     html_body = f"""
@@ -72,7 +83,7 @@ async def send_email(
         subtype=MessageType.html
     )
 
-    # 3. Send Email
+    # 4. Send Email
     fm = FastMail(conf)
     background_tasks.add_task(fm.send_message, message)
     
