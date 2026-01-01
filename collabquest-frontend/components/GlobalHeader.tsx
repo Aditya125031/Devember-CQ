@@ -8,6 +8,7 @@ import {
     User as UserIcon, Settings, LogOut, AlertTriangle, ArrowUpRight
 } from "lucide-react";
 import Link from "next/link";
+import { toast } from "sonner";
 import { usePathname, useRouter } from "next/navigation";
 
 interface UserProfile {
@@ -109,13 +110,27 @@ export default function GlobalHeader() {
             
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
+
+                // --- 1. Handle New Notifications ---
                 if (data.event === "notification") {
                     setNotifications(prev => [data.notification, ...prev]);
+                    // Trigger a refresh so the Action Center (votes) updates immediately
                     window.dispatchEvent(new Event("dashboardUpdate"));
-                } else if (data.event === "team_deleted") {
+                    toast.info("New Notification received");
+                } 
+                // --- 2. Handle Dashboard Updates (The part you missed) ---
+                else if (data.event === "dashboardUpdate") {
+                    // This tells all components (like TeamDetails) to re-fetch data
+                    window.dispatchEvent(new Event("dashboardUpdate"));
+                    if (data.message) toast.info(data.message);
+                }
+                // --- 3. Handle Critical Events ---
+                else if (data.event === "team_deleted") {
                     alert(data.message);
                     window.location.href = "/dashboard";
-                } else if (data.event === "message" && data.message.sender_id !== (res.data._id || res.data.id)) {
+                } 
+                // --- 4. Handle Chat Messages ---
+                else if (data.event === "message" && data.message.sender_id !== (res.data._id || res.data.id)) {
                     setUnreadCount(p => p + 1);
                 }
             };

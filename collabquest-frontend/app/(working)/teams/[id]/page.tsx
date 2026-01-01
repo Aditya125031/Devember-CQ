@@ -6,7 +6,7 @@ import api from "@/lib/api";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import GlobalHeader from "@/components/GlobalHeader";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import {
     Bot, Calendar, Code2, Layers, LayoutDashboard, Loader2, UserPlus, ClipboardList, CheckCircle2, RotateCcw, Bell,
     Sparkles, X, Plus, RefreshCw, Trash2, Check, AlertTriangle, MessageSquare, Mail, ThumbsUp, Clock, Send, Edit2, Users, Trophy, Megaphone, Play, LogOut, UserMinus, Timer, CalendarClock, ChevronRight, Search, Filter, ExternalLink, AlertOctagon, Vote
