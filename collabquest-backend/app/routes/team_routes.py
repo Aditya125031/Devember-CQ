@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Header
 from typing import List, Optional
 from datetime import datetime, timedelta
-from app.models import Team, User, Notification, Match, ChatGroup, DeletionRequest, CompletionRequest, Swipe, Task, MemberRequest, Rating, ExtensionRequest
+from app.models import Team, User, Notification, Match, ChatGroup, DeletionRequest, CompletionRequest, Swipe, Task, MemberRequest, Rating, ExtensionRequest, Announcement
 from app.auth.dependencies import get_current_user
 from app.services.ai_roadmap import generate_roadmap, suggest_tech_stack
 from app.routes.chat_routes import manager 
@@ -22,6 +22,12 @@ class TeamCreate(BaseModel):
 
 class SkillsUpdate(BaseModel):
     needed_skills: List[str]
+
+class AnnouncementRequest(BaseModel):
+    content: str
+
+class AnnouncementUpdate(BaseModel):
+    content: str
 
 class TeamUpdate(BaseModel):
     name: Optional[str] = None
@@ -82,6 +88,7 @@ class TeamDetailResponse(BaseModel):
     deletion_request: Optional[DeletionRequest] = None
     completion_request: Optional[CompletionRequest] = None
     member_requests: List[MemberRequest] = [] 
+    announcements: List[Announcement] = []
     status: str
     has_liked: bool
     is_looking_for_members: bool
@@ -174,7 +181,8 @@ async def get_team_details(team_id: str, current_user: Optional[User] = Depends(
         "member_requests": team.member_requests,
         "status": team.status,
         "has_liked": has_liked,
-        "is_looking_for_members": team.is_looking_for_members
+        "is_looking_for_members": team.is_looking_for_members,
+        "announcements": team.announcements
     }
 
 @router.put("/{team_id}")
@@ -848,3 +856,88 @@ async def reset_match(team_id: str, req: InviteRequest, current_user: User = Dep
         match_record.last_action_at = datetime.now()
         await match_record.save()
     return {"status": "reset"}
+
+@router.post("/{team_id}/announcements")
+async def post_announcement(team_id: str, req: AnnouncementRequest, current_user: User = Depends(get_current_user)):
+    team = await Team.get(team_id)
+    if not team: raise HTTPException(404, "Team not found")
+    
+    leader_id = team.leader_id or team.members[0]
+    if str(current_user.id) != leader_id: 
+        raise HTTPException(403, "Only the Leader can post announcements")
+    
+    # Create Announcement
+    new_announcement = Announcement(
+        content=req.content,
+        author_id=str(current_user.id)
+    )
+    
+    team.announcements.append(new_announcement)
+    await team.save()
+    
+    # Notify all members (except leader)
+    for member_id in team.members:
+        if member_id != str(current_user.id):
+            notif = Notification(
+                recipient_id=member_id,
+                sender_id=str(current_user.id),
+                message=f"📢 New Announcement in {team.name}: {req.content[:30]}...",
+                type="info",
+                related_id=team_id
+            )
+            await notif.insert()
+            await manager.send_personal_message({"event": "dashboardUpdate"}, member_id)
+            
+    return {"status": "posted", "announcement": new_announcement}
+
+@router.delete("/{team_id}/announcements/{announcement_id}")
+async def delete_announcement(team_id: str, announcement_id: str, current_user: User = Depends(get_current_user)):
+    team = await Team.get(team_id)
+    if not team: raise HTTPException(404, "Team not found")
+    
+    leader_id = team.leader_id or team.members[0]
+    if str(current_user.id) != leader_id: 
+        raise HTTPException(403, "Only the Leader can delete announcements")
+        
+    initial_len = len(team.announcements)
+    team.announcements = [a for a in team.announcements if a.id != announcement_id]
+    
+    if len(team.announcements) == initial_len:
+        raise HTTPException(404, "Announcement not found")
+        
+    await team.save()
+    return {"status": "deleted"}
+
+@router.put("/{team_id}/announcements/{announcement_id}")
+async def update_announcement(team_id: str, announcement_id: str, req: AnnouncementUpdate, current_user: User = Depends(get_current_user)):
+    team = await Team.get(team_id)
+    if not team: raise HTTPException(404, "Team not found")
+    
+    # Only Leader or Author can edit (assuming Leader for now based on your request)
+    leader_id = team.leader_id or team.members[0]
+    if str(current_user.id) != leader_id: 
+        raise HTTPException(403, "Only the Leader can edit announcements")
+        
+    # Find and update
+    found = False
+    for ann in team.announcements:
+        if ann.id == announcement_id:
+            ann.content = req.content
+            found = True
+            break
+            
+    if not found:
+        raise HTTPException(404, "Announcement not found")
+        
+    await team.save()
+    
+    # Optional: Notify members of update
+    for member_id in team.members:
+        if member_id != str(current_user.id):
+            # Send real-time trigger
+            await manager.send_personal_message({
+                "event": "dashboardUpdate", 
+                "message": f"Announcement updated in {team.name}"
+            }, member_id)
+            
+    return {"status": "updated", "announcements": team.announcements}

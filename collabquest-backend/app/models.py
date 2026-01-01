@@ -177,6 +177,12 @@ class Task(BaseModel):
     
     created_at: datetime = Field(default_factory=datetime.now)
 
+class Announcement(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    content: str
+    author_id: str
+    created_at: datetime = Field(default_factory=datetime.now)
+
 class Team(Document):
     name: str
     description: str
@@ -196,6 +202,8 @@ class Team(Document):
     deletion_request: Optional[DeletionRequest] = None
     completion_request: Optional[CompletionRequest] = None 
     member_requests: List[MemberRequest] = [] 
+
+    announcements: List[Announcement] = []
     
     tasks: List[Task] = []
     embedding: List[float] = [] 

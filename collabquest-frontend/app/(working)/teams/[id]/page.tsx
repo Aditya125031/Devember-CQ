@@ -6,8 +6,9 @@ import api from "@/lib/api";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import GlobalHeader from "@/components/GlobalHeader";
+import toast from "react-hot-toast";
 import {
-    Bot, Calendar, Code2, Layers, LayoutDashboard, Loader2, UserPlus, ClipboardList, CheckCircle2, RotateCcw,
+    Bot, Calendar, Code2, Layers, LayoutDashboard, Loader2, UserPlus, ClipboardList, CheckCircle2, RotateCcw, Bell,
     Sparkles, X, Plus, RefreshCw, Trash2, Check, AlertTriangle, MessageSquare, Mail, ThumbsUp, Clock, Send, Edit2, Users, Trophy, Megaphone, Play, LogOut, UserMinus, Timer, CalendarClock, ChevronRight, Search, Filter, ExternalLink, AlertOctagon, Vote
 } from "lucide-react";
 
@@ -20,6 +21,13 @@ interface DeletionRequest { is_active: boolean; votes: { [key: string]: string }
 interface CompletionRequest { is_active: boolean; votes: { [key: string]: string }; }
 interface MemberRequest { id: string; target_user_id: string; type: "leave" | "remove"; explanation: string; is_active: boolean; votes: { [key: string]: string }; }
 
+interface Announcement {
+    id: string;
+    content: string;
+    author_id: string;
+    created_at: string;
+}
+
 interface Team {
     id: string; name: string; description: string; leader_id: string;
     members: Member[]; needed_skills: string[]; active_needed_skills: string[];
@@ -31,6 +39,7 @@ interface Team {
     member_requests: MemberRequest[];
     status: string;
     has_liked?: boolean;
+    announcements: Announcement[];
 }
 
 interface TaskItem {
@@ -45,7 +54,7 @@ interface Suggestions { add: string[]; remove: string[]; }
 interface Candidate { id: string; name: string; avatar: string; contact: string; role: string; status: string; rejected_by?: string; }
 
 interface SearchResultUser {
-    id: string; _id?: string; username: string; avatar_url: string; skills: { name: string, level: string }[] | string[]; match_score: number; has_invited?: boolean; 
+    id: string; _id?: string; username: string; avatar_url: string; skills: { name: string, level: string }[] | string[]; match_score: number; has_invited?: boolean;
 }
 
 export default function TeamDetails() {
@@ -59,7 +68,7 @@ export default function TeamDetails() {
     const [loading, setLoading] = useState(true);
     const [candidates, setCandidates] = useState<Candidate[]>([]);
     const [isRecruiting, setIsRecruiting] = useState(true);
-    
+
     // Process States
     const [deletionProcessing, setDeletionProcessing] = useState(false);
     const [completionProcessing, setCompletionProcessing] = useState(false);
@@ -112,6 +121,12 @@ export default function TeamDetails() {
 
     // Visuals
     const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
+
+    //Announcements
+    const [announcementText, setAnnouncementText] = useState("");
+    const [isPostingAnnouncement, setIsPostingAnnouncement] = useState(false);
+    const [editingAnnouncementId, setEditingAnnouncementId] = useState<string | null>(null);
+    const [editContent, setEditContent] = useState("");
 
     // --- EFFECTS ---
     useEffect(() => {
@@ -183,9 +198,9 @@ export default function TeamDetails() {
             params.append("randomize", "true");
             if (recruitSearch) params.append("search", recruitSearch);
             if (recruitSkillFilter) params.append("skills", recruitSkillFilter);
-            
+
             const res = await api.get(`/matches/users?${params.toString()}`);
-            setRecruitResults(res.data.map((u: any) => ({...u, has_invited: false})));
+            setRecruitResults(res.data.map((u: any) => ({ ...u, has_invited: false })));
         } catch (e) { console.error(e); } finally { setIsSearching(false); }
     };
 
@@ -197,7 +212,7 @@ export default function TeamDetails() {
     }
 
     const handleLikeUser = async (user: SearchResultUser) => {
-        if (user.has_invited) return; 
+        if (user.has_invited) return;
         setRecruitResults(prev => prev.map(u => u.id === user.id ? { ...u, has_invited: true } : u));
         try {
             const safeTargetId = getSafeId(user);
@@ -210,31 +225,31 @@ export default function TeamDetails() {
     };
 
     // --- CANDIDATE ACTIONS (Invite, Accept, Reject) ---
-    const sendInvite = async (c: Candidate) => { 
-        try { 
-            setCandidates(prev => prev.map(m => m.id === c.id ? { ...m, status: "invited" } : m)); 
-            await api.post(`/teams/${teamId}/invite`, { target_user_id: c.id }); 
-        } catch (err) { fetchCandidates(teamId); } 
+    const sendInvite = async (c: Candidate) => {
+        try {
+            setCandidates(prev => prev.map(m => m.id === c.id ? { ...m, status: "invited" } : m));
+            await api.post(`/teams/${teamId}/invite`, { target_user_id: c.id });
+        } catch (err) { fetchCandidates(teamId); }
     }
-    const acceptRequest = async (c: Candidate) => { 
-        try { 
-            await api.post(`/teams/${teamId}/members`, { target_user_id: c.id }); 
-            fetchTeamData(); fetchCandidates(teamId); 
-        } catch (err) { } 
+    const acceptRequest = async (c: Candidate) => {
+        try {
+            await api.post(`/teams/${teamId}/members`, { target_user_id: c.id });
+            fetchTeamData(); fetchCandidates(teamId);
+        } catch (err) { }
     }
-    const rejectRequest = async (c: Candidate) => { 
-        if (!confirm("Reject?")) return; 
-        try { 
-            await api.post(`/teams/${teamId}/reject`, { target_user_id: c.id }); 
-            fetchCandidates(teamId); 
-        } catch (err) { } 
+    const rejectRequest = async (c: Candidate) => {
+        if (!confirm("Reject?")) return;
+        try {
+            await api.post(`/teams/${teamId}/reject`, { target_user_id: c.id });
+            fetchCandidates(teamId);
+        } catch (err) { }
     }
-    const deleteCandidate = async (c: Candidate) => { 
-        if (!confirm("Remove?")) return; 
-        try { 
-            await api.delete(`/matches/delete/${teamId}/${c.id}`); 
-            fetchCandidates(teamId); 
-        } catch (err) { } 
+    const deleteCandidate = async (c: Candidate) => {
+        if (!confirm("Remove?")) return;
+        try {
+            await api.delete(`/matches/delete/${teamId}/${c.id}`);
+            fetchCandidates(teamId);
+        } catch (err) { }
     }
 
     // --- INTEREST REQUEST (User -> Project) ---
@@ -353,7 +368,7 @@ export default function TeamDetails() {
         try {
             await api.post(`/teams/${teamId}/rate`, { target_user_id: targetId, score, explanation: ratingExplanation });
             setRatedMembers([...ratedMembers, targetId]);
-            setRatingExplanation(""); 
+            setRatingExplanation("");
             alert("Rating submitted!");
         } catch (e) { } finally { setRatingProcessing(null); }
     }
@@ -387,6 +402,46 @@ export default function TeamDetails() {
         try { await api.post(`/teams/${teamId}/roadmap`, {}); fetchTeamData(); } catch (err: any) { const msg = err.response?.data?.detail || "Roadmap failed."; alert(msg); } finally { setIsGenerating(false); }
     };
 
+    // Announcements
+    const handlePostAnnouncement = async () => {
+        if (!announcementText.trim()) return;
+        setIsPostingAnnouncement(true);
+        try {
+            await api.post(`/teams/${teamId}/announcements`, { content: announcementText });
+            setAnnouncementText("");
+            fetchTeamData(); // Refresh to show new post
+        } catch (e) {
+            alert("Failed to post announcement");
+        } finally {
+            setIsPostingAnnouncement(false);
+        }
+    };
+
+    const handleDeleteAnnouncement = async (announcementId: string) => {
+        if (!confirm("Delete this announcement?")) return;
+        try {
+            await api.delete(`/teams/${teamId}/announcements/${announcementId}`);
+            fetchTeamData();
+        } catch (e) {
+            alert("Failed to delete");
+        }
+    };
+
+    const handleUpdateAnnouncement = async () => {
+        if (!editContent.trim() || !editingAnnouncementId) return;
+        try {
+            await api.put(`/teams/${teamId}/announcements/${editingAnnouncementId}`, {
+                content: editContent
+            });
+            setEditingAnnouncementId(null);
+            setEditContent("");
+            fetchTeamData();
+            toast.success("Announcement updated");
+        } catch (e) {
+            toast.error("Failed to update");
+        }
+    };
+
     if (loading || !team) return <div className="flex h-screen items-center justify-center bg-transparent text-white"><Loader2 className="w-10 h-10 animate-spin text-purple-600" /></div>;
 
     // --- CHECK FOR ACTIVE VOTES ---
@@ -394,7 +449,7 @@ export default function TeamDetails() {
 
     return (
         <div className="min-h-screen w-full bg-transparent text-zinc-100 font-sans selection:bg-purple-500/30 relative overflow-hidden">
-            
+
             {/* Background Effects */}
             <div className="pointer-events-none fixed inset-0 z-30 transition-opacity duration-300" style={{ background: `radial-gradient(800px at ${mousePosition.x}px ${mousePosition.y}px, rgba(168, 85, 247, 0.1), transparent 99%)` }} />
             <div className="fixed inset-0 z-0 pointer-events-none">
@@ -412,32 +467,32 @@ export default function TeamDetails() {
                             <span>Action Required</span>
                             <div className="h-px bg-zinc-800 flex-1"></div>
                         </div>
-                        
+
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             {/* Member Requests (Leave/Remove) */}
                             {team.member_requests?.filter(r => r.is_active).map(req => {
                                 const hasVoted = req.votes[currentUserId];
                                 const approv = Object.values(req.votes).filter(v => v === 'approve').length;
                                 const needed = Math.ceil(team.members.length * 0.7);
-                                
+
                                 return (
                                     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} key={req.id} className="bg-yellow-900/10 backdrop-blur-md border border-yellow-500/30 p-5 rounded-2xl flex flex-col justify-between gap-4 shadow-[0_0_20px_rgba(234,179,8,0.05)]">
-                                            <div className="flex items-start gap-4">
-                                                <div className="p-2.5 bg-yellow-500/20 rounded-xl text-yellow-500 shrink-0"><UserMinus className="w-5 h-5" /></div>
-                                                <div>
-                                                    <h3 className="font-bold text-yellow-100 text-sm mb-1">{req.type === "leave" ? "Member Leaving" : "Remove Member"}</h3>
-                                                    <p className="text-xs text-yellow-200/60 leading-relaxed italic">"{req.explanation}"</p>
+                                        <div className="flex items-start gap-4">
+                                            <div className="p-2.5 bg-yellow-500/20 rounded-xl text-yellow-500 shrink-0"><UserMinus className="w-5 h-5" /></div>
+                                            <div>
+                                                <h3 className="font-bold text-yellow-100 text-sm mb-1">{req.type === "leave" ? "Member Leaving" : "Remove Member"}</h3>
+                                                <p className="text-xs text-yellow-200/60 leading-relaxed italic">"{req.explanation}"</p>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center justify-between pt-2 border-t border-yellow-500/10">
+                                            <div className="text-[10px] text-yellow-500/50 font-mono flex items-center gap-1"><Vote className="w-3 h-3" /> {approv}/{needed} Votes</div>
+                                            {hasVoted ? <span className="text-xs font-bold text-zinc-500 bg-zinc-900/50 px-3 py-1 rounded-lg border border-zinc-800">Voted</span> : (
+                                                <div className="flex gap-2">
+                                                    <button onClick={() => handleVoteRequest(req.id, 'approve')} className="px-3 py-1.5 bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-500 hover:text-white rounded-lg text-xs font-bold transition">Approve</button>
+                                                    <button onClick={() => handleVoteRequest(req.id, 'reject')} className="px-3 py-1.5 bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500 hover:text-white rounded-lg text-xs font-bold transition">Reject</button>
                                                 </div>
-                                            </div>
-                                            <div className="flex items-center justify-between pt-2 border-t border-yellow-500/10">
-                                                <div className="text-[10px] text-yellow-500/50 font-mono flex items-center gap-1"><Vote className="w-3 h-3"/> {approv}/{needed} Votes</div>
-                                                {hasVoted ? <span className="text-xs font-bold text-zinc-500 bg-zinc-900/50 px-3 py-1 rounded-lg border border-zinc-800">Voted</span> : (
-                                                    <div className="flex gap-2">
-                                                        <button onClick={() => handleVoteRequest(req.id, 'approve')} className="px-3 py-1.5 bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-500 hover:text-white rounded-lg text-xs font-bold transition">Approve</button>
-                                                        <button onClick={() => handleVoteRequest(req.id, 'reject')} className="px-3 py-1.5 bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500 hover:text-white rounded-lg text-xs font-bold transition">Reject</button>
-                                                    </div>
-                                                )}
-                                            </div>
+                                            )}
+                                        </div>
                                     </motion.div>
                                 );
                             })}
@@ -445,48 +500,48 @@ export default function TeamDetails() {
                             {/* Deletion Request */}
                             {team.deletion_request?.is_active && (
                                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-red-900/10 backdrop-blur-md border border-red-500/30 p-5 rounded-2xl flex flex-col justify-between gap-4 shadow-[0_0_20px_rgba(239,68,68,0.05)]">
-                                        <div className="flex items-start gap-4">
-                                            <div className="p-2.5 bg-red-500/20 rounded-xl text-red-500 shrink-0"><AlertTriangle className="w-5 h-5" /></div>
-                                            <div>
-                                                <h3 className="font-bold text-red-100 text-sm mb-1">Project Deletion</h3>
-                                                <p className="text-xs text-red-200/60 leading-relaxed">A vote to delete this project has been initiated.</p>
+                                    <div className="flex items-start gap-4">
+                                        <div className="p-2.5 bg-red-500/20 rounded-xl text-red-500 shrink-0"><AlertTriangle className="w-5 h-5" /></div>
+                                        <div>
+                                            <h3 className="font-bold text-red-100 text-sm mb-1">Project Deletion</h3>
+                                            <p className="text-xs text-red-200/60 leading-relaxed">A vote to delete this project has been initiated.</p>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center justify-between pt-2 border-t border-red-500/10">
+                                        <div className="text-[10px] text-red-500/50 font-mono flex items-center gap-1"><Vote className="w-3 h-3" /> Status Check</div>
+                                        {team.deletion_request.votes[currentUserId] ? (
+                                            <span className="text-xs font-bold text-zinc-500 bg-zinc-900/50 px-3 py-1 rounded-lg border border-zinc-800">Voted</span>
+                                        ) : (
+                                            <div className="flex gap-2">
+                                                <button onClick={() => handleVoteDelete('approve')} disabled={deletionProcessing} className="px-3 py-1.5 bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-600 hover:text-white rounded-lg text-xs font-bold transition">Delete</button>
+                                                <button onClick={() => handleVoteDelete('reject')} disabled={deletionProcessing} className="px-3 py-1.5 bg-zinc-800 border border-zinc-700 text-zinc-300 hover:text-white rounded-lg text-xs font-bold transition">Keep</button>
                                             </div>
-                                        </div>
-                                        <div className="flex items-center justify-between pt-2 border-t border-red-500/10">
-                                            <div className="text-[10px] text-red-500/50 font-mono flex items-center gap-1"><Vote className="w-3 h-3"/> Status Check</div>
-                                            {team.deletion_request.votes[currentUserId] ? (
-                                                <span className="text-xs font-bold text-zinc-500 bg-zinc-900/50 px-3 py-1 rounded-lg border border-zinc-800">Voted</span>
-                                            ) : (
-                                                <div className="flex gap-2">
-                                                    <button onClick={() => handleVoteDelete('approve')} disabled={deletionProcessing} className="px-3 py-1.5 bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-600 hover:text-white rounded-lg text-xs font-bold transition">Delete</button>
-                                                    <button onClick={() => handleVoteDelete('reject')} disabled={deletionProcessing} className="px-3 py-1.5 bg-zinc-800 border border-zinc-700 text-zinc-300 hover:text-white rounded-lg text-xs font-bold transition">Keep</button>
-                                                </div>
-                                            )}
-                                        </div>
+                                        )}
+                                    </div>
                                 </motion.div>
                             )}
 
                             {/* Completion Request */}
                             {team.status === 'active' && team.completion_request?.is_active && (
                                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-green-900/10 backdrop-blur-md border border-green-500/30 p-5 rounded-2xl flex flex-col justify-between gap-4 shadow-[0_0_20px_rgba(34,197,94,0.05)]">
-                                        <div className="flex items-start gap-4">
-                                            <div className="p-2.5 bg-green-500/20 rounded-xl text-green-500 shrink-0"><Trophy className="w-5 h-5" /></div>
-                                            <div>
-                                                <h3 className="font-bold text-green-100 text-sm mb-1">Project Completion</h3>
-                                                <p className="text-xs text-green-200/60 leading-relaxed">Vote to mark this project as officially completed.</p>
+                                    <div className="flex items-start gap-4">
+                                        <div className="p-2.5 bg-green-500/20 rounded-xl text-green-500 shrink-0"><Trophy className="w-5 h-5" /></div>
+                                        <div>
+                                            <h3 className="font-bold text-green-100 text-sm mb-1">Project Completion</h3>
+                                            <p className="text-xs text-green-200/60 leading-relaxed">Vote to mark this project as officially completed.</p>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center justify-between pt-2 border-t border-green-500/10">
+                                        <div className="text-[10px] text-green-500/50 font-mono flex items-center gap-1"><Vote className="w-3 h-3" /> Final Vote</div>
+                                        {team.completion_request.votes[currentUserId] ? (
+                                            <span className="text-xs font-bold text-zinc-500 bg-zinc-900/50 px-3 py-1 rounded-lg border border-zinc-800">Voted</span>
+                                        ) : (
+                                            <div className="flex gap-2">
+                                                <button onClick={() => handleVoteComplete('approve')} disabled={completionProcessing} className="px-3 py-1.5 bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-600 hover:text-white rounded-lg text-xs font-bold transition">Confirm</button>
+                                                <button onClick={() => handleVoteComplete('reject')} disabled={completionProcessing} className="px-3 py-1.5 bg-zinc-800 border border-zinc-700 text-zinc-300 hover:text-white rounded-lg text-xs font-bold transition">Reject</button>
                                             </div>
-                                        </div>
-                                        <div className="flex items-center justify-between pt-2 border-t border-green-500/10">
-                                            <div className="text-[10px] text-green-500/50 font-mono flex items-center gap-1"><Vote className="w-3 h-3"/> Final Vote</div>
-                                            {team.completion_request.votes[currentUserId] ? (
-                                                <span className="text-xs font-bold text-zinc-500 bg-zinc-900/50 px-3 py-1 rounded-lg border border-zinc-800">Voted</span>
-                                            ) : (
-                                                <div className="flex gap-2">
-                                                    <button onClick={() => handleVoteComplete('approve')} disabled={completionProcessing} className="px-3 py-1.5 bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-600 hover:text-white rounded-lg text-xs font-bold transition">Confirm</button>
-                                                    <button onClick={() => handleVoteComplete('reject')} disabled={completionProcessing} className="px-3 py-1.5 bg-zinc-800 border border-zinc-700 text-zinc-300 hover:text-white rounded-lg text-xs font-bold transition">Reject</button>
-                                                </div>
-                                            )}
-                                        </div>
+                                        )}
+                                    </div>
                                 </motion.div>
                             )}
                         </div>
@@ -533,113 +588,18 @@ export default function TeamDetails() {
                                 </>
                             )}
                             {!isMember && (
-                                <button 
-                                    onClick={() => setShowInterestModal(true)} 
-                                    disabled={team.has_liked} 
+                                <button
+                                    onClick={() => setShowInterestModal(true)}
+                                    disabled={team.has_liked}
                                     className={`w-full px-6 py-4 rounded-xl font-bold transition flex items-center justify-center gap-2 ${team.has_liked ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-500 text-white shadow-lg shadow-purple-900/20'}`}
                                 >
-                                    <ThumbsUp className="w-5 h-5" /> 
+                                    <ThumbsUp className="w-5 h-5" />
                                     {team.has_liked ? "Request Sent" : "I'm Interested"}
                                 </button>
                             )}
                         </div>
                     </div>
                 </header>
-
-                {/* --- INTERESTED CANDIDATES SECTION --- */}
-                {isLeader && candidates.length > 0 && (
-                    <div className="mb-16">
-                        <h3 className="text-xl font-bold mb-6 flex items-center gap-3 text-blue-400">
-                            <UserPlus className="w-6 h-6" /> Interested Candidates
-                        </h3>
-                        
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {candidates.map(c => (
-                                <div key={c.id} className="bg-zinc-900/50 border border-zinc-800 p-5 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 transition-all hover:border-zinc-700">
-                                    
-                                    {/* Candidate Info */}
-                                    <div className="flex items-center gap-4 w-full sm:w-auto">
-                                        <img 
-                                            src={c.avatar || "https://github.com/shadcn.png"} 
-                                            className="w-12 h-12 rounded-full object-cover border border-zinc-700" 
-                                        />
-                                        <div>
-                                            <h4 className="font-bold text-zinc-200">{c.name}</h4>
-                                            <p className="text-xs text-zinc-500 capitalize font-mono">
-                                                {c.status === 'matched' ? 'Matched via Swipe' : c.status}
-                                            </p>
-                                        </div>
-                                    </div>
-
-                                    {/* Actions */}
-                                    <div className="flex gap-2">
-                                        {/* Status: Matched (Needs Invite) */}
-                                        {c.status === "matched" && (
-                                            <>
-                                                <button 
-                                                    onClick={() => sendInvite(c)} 
-                                                    className="px-4 py-2 bg-blue-600/20 text-blue-400 rounded-lg text-xs font-bold hover:bg-blue-600 hover:text-white transition flex items-center gap-2"
-                                                >
-                                                    <Plus className="w-4 h-4" /> Invite
-                                                </button>
-                                                <button 
-                                                    onClick={() => deleteCandidate(c)} 
-                                                    className="p-2 bg-zinc-800 text-zinc-500 rounded-lg hover:text-red-400 hover:bg-zinc-700 transition"
-                                                    title="Remove Candidate"
-                                                >
-                                                    <Trash2 className="w-4 h-4" />
-                                                </button>
-                                            </>
-                                        )}
-
-                                        {/* Status: Requested (Needs Accept/Reject) */}
-                                        {c.status === "requested" && (
-                                            <>
-                                                <button 
-                                                    onClick={() => acceptRequest(c)} 
-                                                    className="px-4 py-2 bg-green-600/20 text-green-400 rounded-lg text-xs font-bold hover:bg-green-600 hover:text-white transition flex items-center gap-2"
-                                                >
-                                                    <Check className="w-4 h-4" /> Accept
-                                                </button>
-                                                <button 
-                                                    onClick={() => rejectRequest(c)} 
-                                                    className="p-2 bg-red-600/10 text-red-400 rounded-lg hover:bg-red-600 hover:text-white transition"
-                                                    title="Reject"
-                                                >
-                                                    <X className="w-4 h-4" />
-                                                </button>
-                                            </>
-                                        )}
-
-                                        {/* Status: Invited (Waiting) */}
-                                        {c.status === "invited" && (
-                                            <span className="flex items-center gap-1 text-xs font-bold text-zinc-500 bg-zinc-900 px-3 py-1 rounded-lg border border-zinc-800 cursor-default">
-                                                <Clock className="w-3 h-3" /> Invited
-                                            </span>
-                                        )}
-                                        
-                                        {/* Common Actions */}
-                                        <Link href={`/chat?targetId=${c.id}`}>
-                                            <button className="p-2 bg-zinc-800/50 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition">
-                                                <MessageSquare className="w-4 h-4" />
-                                            </button>
-                                        </Link>
-                                        
-                                        {/* Delete button for non-active states */}
-                                        {c.status !== "matched" && c.status !== "requested" && (
-                                            <button 
-                                                onClick={() => deleteCandidate(c)} 
-                                                className="p-2 bg-zinc-800/50 text-zinc-500 rounded-lg hover:text-red-400 hover:bg-zinc-800 transition"
-                                            >
-                                                <Trash2 className="w-4 h-4" />
-                                            </button>
-                                        )}
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
 
                 {/* --- TECH STACK & MEMBERS --- */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
@@ -687,6 +647,196 @@ export default function TeamDetails() {
                     </div>
                 </div>
 
+                {/* --- NOTICE BOARD --- */}
+                {team.members.some(m => (m.id || m._id) === currentUserId) && (
+                    <div className="mb-12">
+                        <div className="bg-[#1a1a1a] border border-yellow-500/20 rounded-[2rem] p-8 relative overflow-hidden">
+                            {/* Decorative Background */}
+                            <div className="absolute top-0 right-0 w-64 h-64 bg-yellow-500/5 rounded-full blur-3xl -z-10"></div>
+
+                            <h3 className="text-xl font-bold flex items-center gap-3 text-yellow-500 mb-6">
+                                <Megaphone className="w-6 h-6" /> Notice Board
+                            </h3>
+
+                            {/* Post Form (Leader Only) */}
+                            {isLeader && (
+                                <div className="flex gap-4 mb-8">
+                                    <input
+                                        className="flex-1 bg-black/50 border border-zinc-800 rounded-xl px-4 py-3 text-sm text-zinc-200 outline-none focus:border-yellow-500/50 transition placeholder:text-zinc-600"
+                                        placeholder="Make an announcement to the team..."
+                                        value={announcementText}
+                                        onChange={(e) => setAnnouncementText(e.target.value)}
+                                        onKeyDown={(e) => e.key === 'Enter' && handlePostAnnouncement()}
+                                    />
+                                    <button
+                                        onClick={handlePostAnnouncement}
+                                        disabled={isPostingAnnouncement || !announcementText.trim()}
+                                        className="bg-yellow-600/20 text-yellow-400 border border-yellow-600/30 hover:bg-yellow-600 hover:text-white px-6 py-3 rounded-xl font-bold text-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {isPostingAnnouncement ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                                        Post
+                                    </button>
+                                </div>
+                            )}
+
+                            {/* Announcements List */}
+                            <div className="space-y-4 max-h-[300px] overflow-y-auto custom-scrollbar pr-2">
+                                {(!team.announcements || team.announcements.length === 0) ? (
+                                    <div className="text-center py-8 text-zinc-600 italic">
+                                        No announcements yet.
+                                    </div>
+                                ) : (
+                                    [...team.announcements].reverse().map((ann: any) => (
+                                        <div key={ann.id} className="bg-zinc-900/50 border border-zinc-800 p-4 rounded-xl flex items-start justify-between group transition-all hover:border-zinc-700">
+                                            <div className="w-full">
+                                                {editingAnnouncementId === ann.id ? (
+                                                    /* EDIT MODE */
+                                                    <div className="flex flex-col gap-2">
+                                                        <textarea
+                                                            value={editContent}
+                                                            onChange={(e) => setEditContent(e.target.value)}
+                                                            className="w-full bg-black/50 border border-purple-500/50 rounded-lg p-2 text-sm text-zinc-200 outline-none resize-none"
+                                                            rows={3}
+                                                        />
+                                                        <div className="flex gap-2 justify-end">
+                                                            <button onClick={() => setEditingAnnouncementId(null)} className="text-xs text-zinc-400 hover:text-white">Cancel</button>
+                                                            <button onClick={handleUpdateAnnouncement} className="text-xs bg-purple-600 text-white px-3 py-1 rounded hover:bg-purple-500">Save</button>
+                                                        </div>
+                                                    </div>
+                                                ) : (
+                                                    /* VIEW MODE */
+                                                    <div>
+                                                        <p className="text-zinc-300 text-sm leading-relaxed whitespace-pre-wrap">{ann.content}</p>
+                                                        <div className="flex items-center gap-2 mt-2">
+                                                            <span className="text-[10px] font-bold text-yellow-500/70 bg-yellow-500/10 px-2 py-0.5 rounded border border-yellow-500/10">LEADER</span>
+                                                            <span className="text-[10px] text-zinc-600">{new Date(ann.created_at).toLocaleString()}</span>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {isLeader && editingAnnouncementId !== ann.id && (
+                                                <div className="flex flex-col gap-1 ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <button
+                                                        onClick={() => { setEditingAnnouncementId(ann.id); setEditContent(ann.content); }}
+                                                        className="p-1.5 text-zinc-500 hover:text-blue-400 hover:bg-blue-500/10 rounded transition"
+                                                        title="Edit"
+                                                    >
+                                                        <Edit2 className="w-3.5 h-3.5" />
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleDeleteAnnouncement(ann.id)}
+                                                        className="p-1.5 text-zinc-500 hover:text-red-400 hover:bg-red-500/10 rounded transition"
+                                                        title="Delete"
+                                                    >
+                                                        <Trash2 className="w-3.5 h-3.5" />
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* --- INTERESTED CANDIDATES SECTION --- */}
+                {isLeader && candidates.length > 0 && (
+                    <div className="mb-16">
+                        <h3 className="text-xl font-bold mb-6 flex items-center gap-3 text-blue-400">
+                            <UserPlus className="w-6 h-6" /> Interested Candidates
+                        </h3>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {candidates.map(c => (
+                                <div key={c.id} className="bg-zinc-900/50 border border-zinc-800 p-5 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 transition-all hover:border-zinc-700">
+
+                                    {/* Candidate Info */}
+                                    <div className="flex items-center gap-4 w-full sm:w-auto">
+                                        <img
+                                            src={c.avatar || "https://github.com/shadcn.png"}
+                                            className="w-12 h-12 rounded-full object-cover border border-zinc-700"
+                                        />
+                                        <div>
+                                            <h4 className="font-bold text-zinc-200">{c.name}</h4>
+                                            <p className="text-xs text-zinc-500 capitalize font-mono">
+                                                {c.status === 'matched' ? 'Matched via Swipe' : c.status}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    {/* Actions */}
+                                    <div className="flex gap-2">
+                                        {/* Status: Matched (Needs Invite) */}
+                                        {c.status === "matched" && (
+                                            <>
+                                                <button
+                                                    onClick={() => sendInvite(c)}
+                                                    className="px-4 py-2 bg-blue-600/20 text-blue-400 rounded-lg text-xs font-bold hover:bg-blue-600 hover:text-white transition flex items-center gap-2"
+                                                >
+                                                    <Plus className="w-4 h-4" /> Invite
+                                                </button>
+                                                <button
+                                                    onClick={() => deleteCandidate(c)}
+                                                    className="p-2 bg-zinc-800 text-zinc-500 rounded-lg hover:text-red-400 hover:bg-zinc-700 transition"
+                                                    title="Remove Candidate"
+                                                >
+                                                    <Trash2 className="w-4 h-4" />
+                                                </button>
+                                            </>
+                                        )}
+
+                                        {/* Status: Requested (Needs Accept/Reject) */}
+                                        {c.status === "requested" && (
+                                            <>
+                                                <button
+                                                    onClick={() => acceptRequest(c)}
+                                                    className="px-4 py-2 bg-green-600/20 text-green-400 rounded-lg text-xs font-bold hover:bg-green-600 hover:text-white transition flex items-center gap-2"
+                                                >
+                                                    <Check className="w-4 h-4" /> Accept
+                                                </button>
+                                                <button
+                                                    onClick={() => rejectRequest(c)}
+                                                    className="p-2 bg-red-600/10 text-red-400 rounded-lg hover:bg-red-600 hover:text-white transition"
+                                                    title="Reject"
+                                                >
+                                                    <X className="w-4 h-4" />
+                                                </button>
+                                            </>
+                                        )}
+
+                                        {/* Status: Invited (Waiting) */}
+                                        {c.status === "invited" && (
+                                            <span className="flex items-center gap-1 text-xs font-bold text-zinc-500 bg-zinc-900 px-3 py-1 rounded-lg border border-zinc-800 cursor-default">
+                                                <Clock className="w-3 h-3" /> Invited
+                                            </span>
+                                        )}
+
+                                        {/* Common Actions */}
+                                        <Link href={`/chat?targetId=${c.id}`}>
+                                            <button className="p-2 bg-zinc-800/50 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition">
+                                                <MessageSquare className="w-4 h-4" />
+                                            </button>
+                                        </Link>
+
+                                        {/* Delete button for non-active states */}
+                                        {c.status !== "matched" && c.status !== "requested" && (
+                                            <button
+                                                onClick={() => deleteCandidate(c)}
+                                                className="p-2 bg-zinc-800/50 text-zinc-500 rounded-lg hover:text-red-400 hover:bg-zinc-800 transition"
+                                            >
+                                                <Trash2 className="w-4 h-4" />
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+
                 {/* --- TASKS --- */}
                 {team.status !== 'planning' && team.status !== 'completed' && (
                     <div className="mb-20">
@@ -721,7 +871,7 @@ export default function TeamDetails() {
                                                 else if (task.status === 'review') style = { container: "border-green-500/50 bg-green-900/10", iconBox: "bg-green-500/20 text-green-400", text: "text-green-100", metaText: "text-green-400/60", icon: <CheckCircle2 className="w-5 h-5" /> };
                                                 else if (task.is_overdue) style = { container: "border-red-600/60 bg-red-900/20 shadow-[0_0_15px_rgba(220,38,38,0.15)]", iconBox: "bg-red-600/20 text-red-500", text: "text-red-100", metaText: "text-red-400", icon: <AlertTriangle className="w-5 h-5" /> };
                                                 else if (task.was_extended) style = { container: "border-purple-500/50 bg-purple-900/10", iconBox: "bg-purple-500/20 text-purple-400", text: "text-purple-100", metaText: "text-purple-400/60", icon: <CalendarClock className="w-5 h-5" /> };
-                                                
+
                                                 return (
                                                     <div key={task.id} className={`border p-4 rounded-xl flex flex-col md:flex-row items-center justify-between gap-4 transition-all hover:scale-[1.01] ${style.container}`}>
                                                         <div className="flex items-start gap-4 flex-1"><div className={`mt-1 p-2 rounded-full ${style.iconBox}`}>{style.icon}</div><div><h4 className={`font-bold ${style.text}`}>{task.description}</h4><div className={`flex flex-wrap gap-4 mt-1 text-xs font-medium ${style.metaText}`}><span className={`flex items-center gap-1 ${task.is_overdue ? 'font-bold' : ''}`}><Calendar className="w-3 h-3" /> {new Date(task.deadline).toLocaleString()} {task.is_overdue && " (LATE)"}</span>{task.status === 'review' && !isMyTask && <span className="uppercase font-bold tracking-wider">Review Needed</span>}</div></div></div>
@@ -836,19 +986,19 @@ export default function TeamDetails() {
 
                 {/* Email Modal */}
                 {showEmailModal && emailRecipient && (<div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 p-4"><motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="bg-[#111] border border-zinc-800 p-8 rounded-3xl w-full max-w-md shadow-2xl"><div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold flex items-center gap-2 text-white"><Mail className="w-5 h-5 text-purple-500" /> Send Message</h2><button onClick={() => setShowEmailModal(false)}><X className="text-zinc-500 hover:text-white transition" /></button></div><div className="space-y-4"><div className="bg-zinc-900 p-3 rounded-xl text-sm text-zinc-400 border border-zinc-800">To: <span className="text-white font-bold">{emailRecipient.name}</span></div><input className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-4 outline-none focus:border-purple-500 transition text-white" placeholder="Subject" value={emailSubject} onChange={e => setEmailSubject(e.target.value)} /><textarea className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-4 h-32 outline-none focus:border-purple-500 resize-none transition text-white" placeholder="Type your message..." value={emailBody} onChange={e => setEmailBody(e.target.value)} /><button onClick={handleSendEmail} className="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-4 rounded-xl flex items-center justify-center gap-2 transition active:scale-95 shadow-lg shadow-purple-900/20"><Send className="w-4 h-4" /> Send</button></div></motion.div></div>)}
-                
+
                 {/* Explain Modal */}
                 {showExplainModal && (<div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 p-4"><motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="bg-[#111] border border-white/10 p-10 rounded-[2.5rem] w-full max-w-md shadow-2xl"><h2 className="text-2xl font-black mb-4 text-white">{actionType === "leave" ? "Confirm Departure" : "Confirm Removal"}</h2><textarea className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-5 h-32 mb-8 outline-none focus:border-red-500 transition-all resize-none text-sm text-white" placeholder="Please provide a reason..." value={explanation} onChange={e => setExplanation(e.target.value)} /><div className="flex gap-4"><button onClick={handleConfirmAction} className="flex-1 bg-red-600 py-4 rounded-xl font-bold text-sm shadow-lg shadow-red-500/20 hover:bg-red-500 active:scale-95 text-white">Confirm</button><button onClick={() => setShowExplainModal(false)} className="flex-1 bg-zinc-900 border border-zinc-800 py-4 rounded-xl font-bold text-sm text-zinc-400 hover:bg-zinc-800 hover:text-white transition">Cancel</button></div></motion.div></div>)}
-                
+
                 {/* Extension Modal */}
                 {showExtensionModal && (<div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 p-4"><motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="bg-[#111] border border-white/10 p-10 rounded-[2.5rem] w-full max-w-md shadow-2xl"><h2 className="text-2xl font-black tracking-tight mb-2 text-white">Extend Deadline</h2><p className="text-zinc-500 text-sm mb-8 leading-relaxed">Requesting an extension will require a team vote.</p><input type="datetime-local" className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-white mb-8 outline-none focus:border-blue-500 transition-all" style={{ colorScheme: 'dark' }} value={extensionDate} onChange={e => setExtensionDate(e.target.value)} /><div className="flex gap-4"><button onClick={confirmExtensionRequest} className="flex-1 bg-blue-600 py-4 rounded-xl font-bold text-sm shadow-lg shadow-blue-500/20 transition-all hover:bg-blue-500 active:scale-95 text-white">Submit Request</button><button onClick={() => setShowExtensionModal(false)} className="flex-1 bg-zinc-900 border border-zinc-800 py-4 rounded-xl font-bold text-sm text-zinc-400 hover:bg-zinc-800 hover:text-white transition">Cancel</button></div></motion.div></div>)}
 
                 {/* INTEREST MESSAGE MODAL */}
                 {showInterestModal && (
                     <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                        <motion.div 
-                            initial={{ scale: 0.95, opacity: 0 }} 
-                            animate={{ scale: 1, opacity: 1 }} 
+                        <motion.div
+                            initial={{ scale: 0.95, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
                             className="bg-zinc-900 border border-zinc-800 p-8 rounded-[2rem] w-full max-w-md shadow-2xl"
                         >
                             <div className="flex justify-between items-center mb-6">
@@ -862,7 +1012,7 @@ export default function TeamDetails() {
                                 Add a short message to tell the leader why you're a good fit.
                             </p>
 
-                            <textarea 
+                            <textarea
                                 className="w-full bg-black border border-zinc-800 rounded-xl p-4 h-32 outline-none focus:border-purple-500 transition text-zinc-200 resize-none mb-6"
                                 placeholder="Ex: I have 2 years of React experience and love this idea..."
                                 value={interestMessage}
@@ -871,12 +1021,12 @@ export default function TeamDetails() {
                             />
 
                             <div className="flex gap-3">
-                                <button 
-                                    onClick={handleSendInterest} 
+                                <button
+                                    onClick={handleSendInterest}
                                     disabled={isSendingInterest}
                                     className="flex-1 bg-purple-600 hover:bg-purple-500 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 transition-all shadow-lg shadow-purple-900/20"
                                 >
-                                    {isSendingInterest ? <Loader2 className="w-4 h-4 animate-spin"/> : <Send className="w-4 h-4" />}
+                                    {isSendingInterest ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                                     Send Request
                                 </button>
                             </div>
