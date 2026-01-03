@@ -366,7 +366,7 @@ export default function DashboardClient() {
                     <GlobalHeader />
                 </div>
 
-                <main className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth custom-scrollbar">
+                <main className="flex-1 overflow-y-auto p-4 md:p-8 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:'none'] [scrollbar-width:'none']">
                     <div className="max-w-[1600px] mx-auto space-y-10 pb-20">
 
                         {/* 1. HERO SECTION */}
