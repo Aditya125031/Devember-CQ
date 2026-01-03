@@ -10,6 +10,7 @@ from pydantic import BaseModel
 import math
 from app.auth.utils import verify_token 
 import uuid 
+from bson import ObjectId
 
 router = APIRouter()
 
@@ -165,6 +166,45 @@ def has_active_vote(team: Team) -> bool:
 async def clear_swipes(user_id: str, team_id: str, leader_id: str):
     await Swipe.find(Swipe.swiper_id == user_id, Swipe.target_id == team_id).delete()
     await Swipe.find(Swipe.swiper_id == leader_id, Swipe.target_id == user_id).delete()
+
+@router.get("/top")
+async def get_top_projects():
+    """Returns top 10 projects based on Favorites count (Aggregation)"""
+    pipeline = [
+        {"$unwind": "$favorites"},
+        {"$group": {"_id": "$favorites", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 10}
+    ]
+    
+    # ✅ FIX: Use get_pymongo_collection() and await the to_list call only
+    # accessing .aggregate() is synchronous in Motor, .to_list() is asynchronous
+    cursor = User.get_pymongo_collection().aggregate(pipeline)
+    agg_results = await cursor.to_list(length=10)
+    
+    results = []
+    for item in agg_results:
+        team_id = item["_id"]
+        count = item["count"]
+        
+        # Validate ID format
+        if not ObjectId.is_valid(team_id): continue
+        
+        team = await Team.get(team_id)
+        if team:
+            # Handle leader fallback logic same as other endpoints
+            actual_leader_id = team.leader_id or (team.members[0] if team.members else None)
+            
+            results.append({
+                "id": str(team.id),
+                "name": team.name,
+                "description": team.description,
+                "leader_id": actual_leader_id,
+                "favorite_count": count,
+                "needed_skills": team.needed_skills[:3]
+            })
+            
+    return results
 
 @router.post("/", response_model=Team)
 async def create_team(team_data: TeamCreate, current_user: User = Depends(get_current_user)):

@@ -54,6 +54,21 @@ async def read_users_me(current_user: User = Depends(get_current_user)):
     
     return current_user
 
+@router.get("/top", response_model=List[dict])
+async def get_top_users():
+    """Returns top 10 users based on Trust Score"""
+    users = await User.find_all().sort("-trust_score").limit(10).to_list()
+    results = []
+    for u in users:
+        results.append({
+            "id": str(u.id),
+            "username": u.username,
+            "avatar_url": u.avatar_url,
+            "trust_score": u.trust_score,
+            "skills": [s.name for s in u.skills[:3]]
+        })
+    return results
+
 # --- BLOCKING FEATURE (NEW) ---
 
 @router.post("/{user_id}/block")
