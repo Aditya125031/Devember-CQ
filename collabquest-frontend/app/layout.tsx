@@ -3,6 +3,7 @@ import { Geist, Geist_Mono, Inter } from "next/font/google";
 import FloatingChatbot from "../components/FloatingChatbot";
 import "./globals.css";
 import SelectionTTS from "@/components/SelectionTTS";
+import Footer from "@/components/Footer";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -24,6 +25,7 @@ export default function RootLayout({
         {/* Global floating chatbot */}
         <FloatingChatbot />   
         {children}
+        <Footer />
       </body>
     </html>
   );

@@ -33,12 +33,20 @@ class ConnectedAccounts(BaseModel):
     codeforces: Optional[str] = None
     leetcode: Optional[str] = None
 
+class RatingBreakdown(BaseModel):
+    technical: int = 5
+    communication: int = 5
+    collaboration: int = 5
+    reliability: int = 5
+    problem_solving: int = 5
+
 class Rating(BaseModel):
     project_id: str
     project_name: str
     rater_id: str
     rater_name: str
-    score: int
+    score: float
+    breakdown: RatingBreakdown
     explanation: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.now)
 

@@ -8,12 +8,20 @@ import Link from "next/link";
 import GlobalHeader from "@/components/GlobalHeader";
 import { toast } from "sonner";
 import {
-    Bot, Calendar, Code2, Layers, LayoutDashboard, Loader2, UserPlus, ClipboardList, CheckCircle2, RotateCcw, Bell, Ban,
+    Bot, Calendar, Code2, Layers, LayoutDashboard, Loader2, UserPlus, ClipboardList, CheckCircle2, RotateCcw, Bell, Ban, Star, MessageSquarePlus, XCircle,
     Sparkles, X, Plus, RefreshCw, Trash2, Check, AlertTriangle, MessageSquare, Mail, ThumbsUp, Clock, Send, Edit2, Users, Trophy, Megaphone, Play, LogOut, UserMinus, Timer, CalendarClock, ChevronRight, Search, Filter, ExternalLink, AlertOctagon, Vote
 } from "lucide-react";
 
 // --- CONSTANTS ---
 const PRESET_SKILLS = ["React", "Python", "Node.js", "TypeScript", "Next.js", "Tailwind", "MongoDB", "Firebase", "Flutter", "Java", "C++", "Rust", "Go", "Figma", "UI/UX", "AI/ML", "Docker", "AWS", "Solidity"];
+
+const RATING_CRITERIA = [
+    { id: "technical", label: "Technical Skill", desc: "Code quality, logic, and technical contribution." },
+    { id: "communication", label: "Communication", desc: "Responsiveness, clarity, and updates." },
+    { id: "collaboration", label: "Teamwork", desc: "Helpfulness, attitude, and code reviews." },
+    { id: "reliability", label: "Reliability", desc: "Meeting deadlines and availability." },
+    { id: "problem_solving", label: "Problem Solving", desc: "Ability to overcome challenges and debug." },
+];
 
 // --- INTERFACES ---
 interface Member { id: string; username: string; avatar_url: string; email: string; role?: string; _id?: string }
@@ -44,6 +52,7 @@ interface Team {
     status: string;
     has_liked?: boolean;
     announcements: Announcement[];
+    rated_member_ids?: string[];
 }
 
 interface TaskItem {
@@ -81,6 +90,12 @@ export default function TeamDetails() {
     const [isGenerating, setIsGenerating] = useState(false);
     const [isSuggesting, setIsSuggesting] = useState(false);
     const [isTaskLoading, setIsTaskLoading] = useState(false);
+    const [ratingModalOpen, setRatingModalOpen] = useState(false);
+    const [ratingTarget, setRatingTarget] = useState<any>(null);
+    const [ratingValues, setRatingValues] = useState<any>({
+        technical: 5, communication: 5, collaboration: 5, reliability: 5, problem_solving: 5
+    });
+    const [ratingExplanation, setRatingExplanation] = useState("");
 
     // Interest Modal State
     const [showInterestModal, setShowInterestModal] = useState(false);
@@ -97,8 +112,6 @@ export default function TeamDetails() {
     const [actionType, setActionType] = useState<"leave" | "remove" | null>(null);
     const [actionTargetId, setActionTargetId] = useState<string | null>(null);
     const [explanation, setExplanation] = useState("");
-
-    const [ratingExplanation, setRatingExplanation] = useState("");
 
     const [showExtensionModal, setShowExtensionModal] = useState(false);
     const [extensionTaskId, setExtensionTaskId] = useState<string | null>(null);
@@ -165,6 +178,9 @@ export default function TeamDetails() {
             setTeam(res.data);
             setLocalSkills(res.data.needed_skills || []);
             setIsRecruiting(res.data.is_looking_for_members);
+            if (res.data.rated_member_ids) {
+                setRatedMembers(res.data.rated_member_ids);
+            }
             if (res.data.leader_id) fetchCandidates(res.data.id);
             fetchTasks();
         } catch (err) { console.error(err); } finally { setLoading(false); }
@@ -226,6 +242,39 @@ export default function TeamDetails() {
             setRecruitResults(prev => prev.map(u => u.id === user.id ? { ...u, has_invited: false } : u));
             alert("Failed to send like.");
         }
+    };
+
+    //Rating Logic
+    const openRatingModal = (member: any) => {
+        setRatingTarget(member);
+        setRatingValues({ technical: 5, communication: 5, collaboration: 5, reliability: 5, problem_solving: 5 });
+        setRatingExplanation("");
+        setRatingModalOpen(true);
+    };
+
+    const submitRating = async () => {
+        if (!ratingTarget) return;
+        setRatingProcessing(ratingTarget.id);
+
+        try {
+            await api.post(`/teams/${teamId}/rate`, {
+                target_user_id: ratingTarget.id,
+                breakdown: ratingValues,
+                explanation: ratingExplanation
+            });
+
+            setRatedMembers([...ratedMembers, ratingTarget.id]);
+            setRatingModalOpen(false);
+            alert("Rating submitted successfully!");
+        } catch (e) {
+            alert("Failed to submit rating.");
+        } finally {
+            setRatingProcessing(null);
+        }
+    };
+
+    const updateRatingValue = (criterionId: string, value: number) => {
+        setRatingValues((prev: any) => ({ ...prev, [criterionId]: value }));
     };
 
     // --- CANDIDATE ACTIONS (Invite, Accept, Reject) ---
@@ -444,7 +493,7 @@ export default function TeamDetails() {
             setAnnouncementText("");
             fetchTeamData(); // Refresh to show new post
         } catch (e) {
-            alert("Failed to post announcement");
+            toast.error("Failed to post announcement");
         } finally {
             setIsPostingAnnouncement(false);
         }
@@ -456,7 +505,7 @@ export default function TeamDetails() {
             await api.delete(`/teams/${teamId}/announcements/${announcementId}`);
             fetchTeamData();
         } catch (e) {
-            alert("Failed to delete");
+            toast.error("Failed to delete");
         }
     };
 
@@ -757,6 +806,9 @@ export default function TeamDetails() {
                                                                 {/* Progress Stats */}
                                                                 <div className="flex justify-between items-end mb-2">
                                                                     <span className="text-xs font-bold text-zinc-400 uppercase tracking-wide">Consensus Progress</span>
+                                                                    <span className="text-[10px] text-zinc-500 font-medium flex items-center gap-1">
+                                                                        <Users className="w-3 h-3" /> {voteData.approveCount + voteData.rejectCount} voted so far
+                                                                    </span>
                                                                     <div className="text-right">
                                                                         {/* Show Actual Count vs Required */}
                                                                         <span className="text-lg font-black text-white">{voteData.approveCount}</span>
@@ -992,23 +1044,125 @@ export default function TeamDetails() {
                     )}
                 </div>
 
-                {/* --- RATING --- */}
                 {team.status === 'completed' && (
-                    <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-gradient-to-br from-yellow-900/10 via-zinc-900 to-purple-900/10 border border-yellow-500/20 p-10 rounded-[3rem] text-center shadow-2xl relative overflow-hidden">
+                    <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-gradient-to-br from-yellow-900/10 via-zinc-900 to-purple-900/10 border border-yellow-500/20 p-10 rounded-[3rem] text-center shadow-2xl relative overflow-hidden mb-20">
                         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-1 bg-gradient-to-r from-transparent via-yellow-500/50 to-transparent"></div>
-                        <div className="inline-flex p-5 bg-yellow-500/10 rounded-full mb-6 border border-yellow-500/20 shadow-[0_0_30px_rgba(234,179,8,0.15)]"><Trophy className="w-12 h-12 text-yellow-400" /></div>
+                        <div className="inline-flex p-5 bg-yellow-500/10 rounded-full mb-6 border border-yellow-500/20 shadow-[0_0_30px_rgba(234,179,8,0.15)]">
+                            <Trophy className="w-12 h-12 text-yellow-400" />
+                        </div>
                         <h2 className="text-4xl font-black text-white mb-2">Mission Accomplished!</h2>
-                        <p className="text-zinc-400 max-w-xl mx-auto mb-10 text-lg">The project is officially complete. Please rate your experience.</p>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-left max-w-4xl mx-auto">
+                        <p className="text-zinc-400 max-w-xl mx-auto mb-10 text-lg">The project is officially complete. Please evaluate your teammates.</p>
+
+                        {/* Member Cards Grid */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
                             {team.members.filter(m => m.id !== currentUserId).map(m => (
-                                <div key={m.id} className="bg-black/40 border border-zinc-800 p-6 rounded-2xl flex flex-col gap-4">
-                                    <div className="flex items-center gap-4"><img src={m.avatar_url || "https://github.com/shadcn.png"} className="w-12 h-12 rounded-full border border-zinc-700" /><div><span className="font-bold text-lg block text-zinc-200">{m.username}</span><span className="text-xs text-zinc-500 font-mono">{m.role || "Collaborator"}</span></div>{ratedMembers.includes(m.id) && <span className="ml-auto text-green-400 text-xs font-bold bg-green-900/20 px-3 py-1 rounded-full border border-green-500/20 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Rated</span>}</div>
-                                    {!ratedMembers.includes(m.id) && (<div className="space-y-4 animate-in fade-in slide-in-from-top-2"><textarea className="w-full bg-zinc-900 border border-zinc-700 rounded-xl p-3 text-sm focus:border-yellow-500/50 outline-none resize-none h-24 text-zinc-300 placeholder:text-zinc-600" placeholder={`How was working with ${m.username}?`} value={ratingExplanation} onChange={e => setRatingExplanation(e.target.value)} /><div><span className="text-[10px] uppercase text-zinc-500 font-bold mb-2 block">Trust Score</span><div className="flex gap-1">{[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(s => (<button key={s} onClick={() => handleRateMember(m.id, s)} disabled={ratingProcessing === m.id} className={`flex-1 h-8 rounded text-[10px] font-bold transition-all hover:-translate-y-1 ${s >= 8 ? 'bg-green-500/20 text-green-400 hover:bg-green-500 hover:text-white' : s >= 5 ? 'bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500 hover:text-white' : 'bg-red-500/20 text-red-400 hover:bg-red-500 hover:text-white'}`}>{s}</button>))}</div></div></div>)}
+                                <div key={m.id} className="bg-black/40 border border-zinc-800 p-6 rounded-3xl flex flex-col items-center gap-4 hover:border-zinc-700 transition group">
+                                    <img src={m.avatar_url || "https://github.com/shadcn.png"} className="w-20 h-20 rounded-full border-2 border-zinc-700 shadow-xl group-hover:scale-105 transition-transform" />
+                                    <div className="text-center">
+                                        <h4 className="font-bold text-xl text-zinc-200">{m.username}</h4>
+                                        <p className="text-xs text-zinc-500 font-mono mt-1">{m.role || "Team Member"}</p>
+                                    </div>
+
+                                    {ratedMembers.includes(m.id) ? (
+                                        <div className="mt-4 px-6 py-3 bg-green-500/10 text-green-400 border border-green-500/20 rounded-xl font-bold text-sm flex items-center gap-2 cursor-default">
+                                            <CheckCircle2 className="w-4 h-4" /> Rated
+                                        </div>
+                                    ) : (
+                                        <button
+                                            onClick={() => openRatingModal(m)}
+                                            className="mt-4 w-full py-3 bg-white text-black rounded-xl font-bold text-sm hover:bg-zinc-200 transition active:scale-95 shadow-lg shadow-white/5"
+                                        >
+                                            Rate Performance
+                                        </button>
+                                    )}
                                 </div>
                             ))}
                         </div>
                     </motion.div>
                 )}
+
+                {/* --- RATING SURVEY MODAL --- */}
+                <AnimatePresence>
+                    {ratingModalOpen && ratingTarget && (
+                        <div className="fixed inset-0 bg-black/90 backdrop-blur-md flex items-center justify-center z-50 p-4">
+                            <motion.div
+                                initial={{ scale: 0.9, opacity: 0 }}
+                                animate={{ scale: 1, opacity: 1 }}
+                                exit={{ scale: 0.9, opacity: 0 }}
+                                className="bg-[#111] border border-zinc-800 w-full max-w-2xl rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+                            >
+                                {/* Modal Header */}
+                                <div className="p-8 border-b border-zinc-800 bg-zinc-900/50 flex justify-between items-center">
+                                    <div>
+                                        <h2 className="text-2xl font-black text-white flex items-center gap-3">
+                                            Rate <span className="text-purple-400">{ratingTarget.username}</span>
+                                        </h2>
+                                        <p className="text-zinc-500 text-sm mt-1">Please provide honest feedback on the following criteria.</p>
+                                    </div>
+                                    <button onClick={() => setRatingModalOpen(false)} className="p-2 hover:bg-zinc-800 rounded-full transition">
+                                        <XCircle className="w-8 h-8 text-zinc-500 hover:text-white" />
+                                    </button>
+                                </div>
+
+                                {/* Survey Questions */}
+                                <div className="flex-1 overflow-y-auto p-8 space-y-8 custom-scrollbar">
+                                    {RATING_CRITERIA.map((criterion) => (
+                                        <div key={criterion.id} className="space-y-3">
+                                            <div className="flex justify-between items-end">
+                                                <label className="text-sm font-bold text-zinc-200 flex items-center gap-2">
+                                                    {criterion.label}
+                                                    <span className="text-xs font-normal text-zinc-500 ml-2 hidden sm:inline-block">- {criterion.desc}</span>
+                                                </label>
+                                                <span className={`text-sm font-black w-8 text-right ${ratingValues[criterion.id] >= 8 ? 'text-green-400' : ratingValues[criterion.id] >= 5 ? 'text-yellow-400' : 'text-red-400'}`}>
+                                                    {ratingValues[criterion.id]}
+                                                </span>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min="1"
+                                                max="10"
+                                                value={ratingValues[criterion.id]}
+                                                onChange={(e) => updateRatingValue(criterion.id, parseInt(e.target.value))}
+                                                className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                                            />
+                                            <div className="flex justify-between text-[10px] text-zinc-600 font-bold uppercase tracking-wider">
+                                                <span>Needs Improvement</span>
+                                                <span>Excellent</span>
+                                            </div>
+                                        </div>
+                                    ))}
+
+                                    <div className="pt-4 border-t border-zinc-800">
+                                        <label className="text-sm font-bold text-zinc-200 mb-3 block flex items-center gap-2">
+                                            <MessageSquarePlus className="w-4 h-4 text-zinc-500" /> Additional Comments (Optional)
+                                        </label>
+                                        <textarea
+                                            className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-sm text-zinc-200 outline-none focus:border-purple-500 transition resize-none h-24 placeholder:text-zinc-600"
+                                            placeholder={`Share specifics about ${ratingTarget.username}'s contribution...`}
+                                            value={ratingExplanation}
+                                            onChange={(e) => setRatingExplanation(e.target.value)}
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Footer */}
+                                <div className="p-6 border-t border-zinc-800 bg-zinc-900/50 flex justify-end gap-3">
+                                    <button onClick={() => setRatingModalOpen(false)} className="px-6 py-3 rounded-xl font-bold text-sm text-zinc-400 hover:text-white hover:bg-zinc-800 transition">
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={submitRating}
+                                        disabled={ratingProcessing === ratingTarget.id}
+                                        className="px-8 py-3 bg-purple-600 hover:bg-purple-500 text-white rounded-xl font-bold text-sm shadow-lg shadow-purple-900/20 transition active:scale-95 flex items-center gap-2"
+                                    >
+                                        {ratingProcessing === ratingTarget.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Star className="w-4 h-4 fill-current" />}
+                                        Submit Rating
+                                    </button>
+                                </div>
+                            </motion.div>
+                        </div>
+                    )}
+                </AnimatePresence>
             </div>
 
             {/* --- MODALS --- */}

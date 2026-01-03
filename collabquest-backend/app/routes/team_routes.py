@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Header
 from typing import List, Optional
 from datetime import datetime, timedelta
-from app.models import Team, User, Notification, Match, ChatGroup, DeletionRequest, CompletionRequest, Swipe, Task, MemberRequest, Rating, ExtensionRequest, Announcement
+from app.models import Team, User, Notification, Match, ChatGroup, DeletionRequest, CompletionRequest, Swipe, Task, MemberRequest, Rating, RatingBreakdown, ExtensionRequest, Announcement
 from app.auth.dependencies import get_current_user
 from app.services.ai_roadmap import generate_roadmap, suggest_tech_stack
 from app.routes.chat_routes import manager 
@@ -53,7 +53,7 @@ class InviteRequest(BaseModel):
 
 class RatingRequest(BaseModel):
     target_user_id: str
-    score: int 
+    breakdown: dict
     explanation: Optional[str] = None 
 
 class CreateTaskRequest(BaseModel):
@@ -92,6 +92,7 @@ class TeamDetailResponse(BaseModel):
     status: str
     has_liked: bool
     is_looking_for_members: bool
+    rated_member_ids: List[str] = []
 
 class TaskDetailResponse(BaseModel):
     id: str
@@ -193,6 +194,7 @@ async def get_team_details(team_id: str, current_user: Optional[User] = Depends(
         await team.save()
     actual_leader_id = team.leader_id or (team.members[0] if team.members else None)
     member_objects = []
+    rated_ids = []
     for uid in team.members:
         user = await User.get(uid)
         if user:
@@ -200,6 +202,13 @@ async def get_team_details(team_id: str, current_user: Optional[User] = Depends(
                 "id": str(user.id), "username": user.username,
                 "avatar_url": user.avatar_url or "https://github.com/shadcn.png", "email": user.email
             })
+            if current_user:
+                has_rated = any(
+                    r.project_id == str(team.id) and r.rater_id == str(current_user.id) 
+                    for r in user.ratings_received
+                )
+                if has_rated:
+                    rated_ids.append(str(user.id))
             
     from app.models import ChatGroup
     chat_group = await ChatGroup.find_one(ChatGroup.team_id == str(team.id))
@@ -225,7 +234,8 @@ async def get_team_details(team_id: str, current_user: Optional[User] = Depends(
         "status": team.status,
         "has_liked": has_liked,
         "is_looking_for_members": team.is_looking_for_members,
-        "announcements": team.announcements
+        "announcements": team.announcements,
+        "rated_member_ids": rated_ids
     }
 
 @router.put("/{team_id}")
@@ -809,8 +819,7 @@ async def vote_member_request(team_id: str, request_id: str, vote: VoteRequest, 
 async def initiate_deletion(team_id: str, current_user: User = Depends(get_current_user)):
     team = await Team.get(team_id)
     if not team: raise HTTPException(404)
-    if has_active_vote(team):
-        raise HTTPException(400, "Another vote is currently active. Please wait for it to conclude.")
+    if has_active_vote(team): raise HTTPException(400, "Another vote is currently active. Please wait for it to conclude.")
     leader_id = team.leader_id or team.members[0]
     if str(current_user.id) != leader_id: raise HTTPException(403)
     if team.status == "completed": raise HTTPException(400, "Project is locked")
@@ -888,8 +897,7 @@ async def vote_deletion(team_id: str, vote: VoteRequest, current_user: User = De
 async def initiate_completion(team_id: str, current_user: User = Depends(get_current_user)):
     team = await Team.get(team_id)
     if not team: raise HTTPException(404)
-    if has_active_vote(team):
-        raise HTTPException(400, "Another vote is currently active. Please wait for it to conclude.")
+    if has_active_vote(team): raise HTTPException(400, "Another vote is currently active. Please wait for it to conclude.")
     leader_id = team.leader_id or team.members[0]
     if str(current_user.id) != leader_id: raise HTTPException(403)
     if len(team.members) == 1:
@@ -979,16 +987,48 @@ async def rate_teammate(team_id: str, req: RatingRequest, current_user: User = D
     team = await Team.get(team_id)
     if not team: raise HTTPException(404)
     if str(current_user.id) not in team.members or req.target_user_id not in team.members: raise HTTPException(403)
+    
     target = await User.get(req.target_user_id)
     if target:
+        # 1. Parse Breakdown
+        bd = req.breakdown
+        technical = bd.get('technical', 5)
+        communication = bd.get('communication', 5)
+        collaboration = bd.get('collaboration', 5)
+        reliability = bd.get('reliability', 5)
+        problem_solving = bd.get('problem_solving', 5)
+        
+        # 2. Calculate Average Score
+        avg_score = (technical + communication + collaboration + reliability + problem_solving) / 5.0
+        
+        # 3. Update User Trust Score (Weighted Average)
         current_score = target.trust_score
         count = target.rating_count
-        new_score = ((current_score * count) + req.score) / (count + 1)
-        target.trust_score = round(new_score, 1)
+        new_global_score = ((current_score * count) + avg_score) / (count + 1)
+        
+        target.trust_score = round(new_global_score, 1)
         target.rating_count += 1
-        new_rating = Rating(project_id=team_id, project_name=team.name, rater_id=str(current_user.id), rater_name=current_user.username, score=req.score, explanation=req.explanation)
+        
+        # 4. Create Rating Object
+        breakdown_obj = RatingBreakdown(
+            technical=technical, communication=communication, 
+            collaboration=collaboration, reliability=reliability, 
+            problem_solving=problem_solving
+        )
+        
+        new_rating = Rating(
+            project_id=team_id, 
+            project_name=team.name, 
+            rater_id=str(current_user.id), 
+            rater_name=current_user.username, 
+            score=round(avg_score, 1), 
+            breakdown=breakdown_obj,
+            explanation=req.explanation
+        )
+        
         target.ratings_received.insert(0, new_rating)
         await target.save()
+        
     return {"status": "rated"}
 
 @router.post("/{team_id}/reset")
