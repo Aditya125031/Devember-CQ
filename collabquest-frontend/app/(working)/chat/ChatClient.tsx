@@ -403,6 +403,20 @@ function ChatPage() {
         }
     };
 
+    // --- 1. MOUSE STATE FOR GLOW ---
+  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
+
+  // --- 2. MOUSE EFFECT HOOK ---
+  useEffect(() => {
+    const updateMousePosition = (ev: MouseEvent) => {
+      setMousePosition({ x: ev.clientX, y: ev.clientY });
+    };
+    window.addEventListener("mousemove", updateMousePosition);
+    return () => {
+      window.removeEventListener("mousemove", updateMousePosition);
+    };
+  }, []);
+
     const toggleMute = () => {
         if (localStream.current) {
             const newMutedState = !isMuted;
@@ -443,7 +457,13 @@ function ChatPage() {
     const filteredChats = chatList.filter(chat => chat.name.toLowerCase().includes(searchQuery.toLowerCase()));
 
     return (
-        <div className="h-screen bg-gray-950 text-white flex flex-col overflow-hidden relative">
+        <div className="min-h-screen w-full bg-transparent text-zinc-100 font-sans selection:bg-purple-500/30 relative overflow-hidden">
+            <div 
+        className="pointer-events-none fixed inset-0 z-30 transition-opacity duration-300"
+        style={{
+          background: `radial-gradient(800px at ${mousePosition.x}px ${mousePosition.y}px, rgba(168, 85, 247, 0.1), transparent 80%)`,
+        }}
+      />
             <style jsx global>{` .custom-scrollbar::-webkit-scrollbar { width: 6px; } .custom-scrollbar::-webkit-scrollbar-track { background: #111827; } .custom-scrollbar::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; } .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #4B5563; } `}</style>
 
             {/* --- CALL OVERLAY --- */}
